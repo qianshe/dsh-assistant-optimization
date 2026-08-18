@@ -1,0 +1,24 @@
+{
+  "name": "dsh-assistant-optimization",
+  "version": "1.0.0",
+  "description": "DSH plugin: fold mis-rendered thinking/reasoning content into collapsible blocks and render mermaid diagrams.",
+  "license": "MIT",
+  "type": "module",
+  "files": [
+    "src"
+  ],
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "thinking",
+    "reasoning",
+    "mermaid"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
