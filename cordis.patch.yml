@@ -1,0 +1,5 @@
+# dsh-assistant-optimization — bundle patch
+# Inserts our client-side plugin into the composition.
+- insert:
+    - id: dsh-assistant-optimization
+      name: 'dsh-assistant-optimization'

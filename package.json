@@ -1,11 +1,22 @@
 {
   "name": "dsh-assistant-optimization",
   "version": "1.0.0",
-  "description": "DSH plugin: fold mis-rendered thinking/reasoning content into collapsible blocks and render mermaid diagrams.",
+  "description": "Fold mis-rendered thinking/reasoning content into collapsible blocks and render mermaid diagrams inline.",
   "license": "MIT",
   "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
   "files": [
-    "src"
+    "lib",
+    "cordis.patch.yml"
   ],
   "keywords": [
     "dsh",
@@ -15,8 +26,13 @@
     "reasoning",
     "mermaid"
   ],
-  "scripts": {
-    "test": "node --test"
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
   },
   "engines": {
     "node": ">=20"
