@@ -11,7 +11,8 @@
 // Module dependencies:
 //   markers.js    — localStorage marker CRUD
 //   text-split.js — splitText + transformBlocks
-//   wrapper.js    — WrappedAssistantStep React component + findOfficialRenderer
+//   tool-diff.js  — file-edit diff line count badges
+//   wrapper.js    — WrappedAssistantStep / WrappedToolCallTree + official renderer finders
 //   mermaid.js    — MutationObserver + SVG rendering
 //   settings.js   — TagsSetting React component
 //
@@ -30,6 +31,18 @@ function apply(ctx) {
         var official = findOfficialRenderer(slots);
         var wrapperProps = Object.assign({}, rawProps, { _officialRenderer: official, _rawProps: rawProps });
         return React.createElement(WrappedAssistantStep, wrapperProps);
+      }
+    );
+  });
+
+  // 1b. Wrap official tool-call renderer to add file-edit diff badges
+  slots.inject("conversation.chat.node", function () {
+    return slots.register(
+      { name: "conversation.chat.node", key: "tool-call", priority: -1, locale: "conversation" },
+      function (rawProps) {
+        var official = findToolRenderer(slots);
+        var wrapperProps = Object.assign({}, rawProps, { _officialRenderer: official, _rawProps: rawProps });
+        return React.createElement(WrappedToolCallTree, wrapperProps);
       }
     );
   });

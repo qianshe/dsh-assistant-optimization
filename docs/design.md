@@ -63,12 +63,31 @@ DSH has no native mermaid support — `MarkdownText` renders all code blocks as 
 
 The observer is debounced (50ms) to avoid excessive scans during streaming.
 
+### File-Edit Diff Counts
+
+Write, Edit, and `str_replace_editor` (`command: "str_replace"`) rows already render the applied diff inside an expandable `DiffBlock`. To make the change size visible at a glance, the plugin also wraps the official `tool-call` renderer at `priority: -1`, renders the official `ToolCallTree` unchanged inside a `display: contents` wrapper, then annotates each file-mutation row's file path with a colored line-count badge:
+
+- `+N` (green) for added lines
+- `-N` (red) for removed lines
+- Combined form: `+N/-N`
+
+For `str_replace_editor`, only the `str_replace` command is annotated; read-only commands like `view` are not treated as file edits.
+
+The badge data is read from the same `callView` / `resultView` diff hunks the official diff card uses, so it works during streaming (call-side diff) and after execution (result-side applied diff).
+
 ## 4. File Structure
 
 ```
 src/
-├── host.js     # Marker list state + JSON RPC handlers
-└── client.js   # Renderer wrapper + mermaid post-processor + settings UI
+├── host.js         # Marker list state + JSON RPC handlers
+├── client.js       # Renderer wrapper + mermaid post-processor + settings UI
+└── modules/
+    ├── markers.js      # Marker persistence
+    ├── text-split.js   # Thinking/text split
+    ├── tool-diff.js    # File-edit diff count badges
+    ├── wrapper.js      # Assistant + tool-call renderer wrappers
+    ├── mermaid.js      # Mermaid DOM observer
+    └── settings.js     # Settings UI
 ```
 
 ## 5. RPC Protocol
