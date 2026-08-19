@@ -74,9 +74,19 @@ function createWrapper(React, textSplitMod, markersMod, toolDiffMod) {
     var ref = React.useRef(null);
     var node = props.node;
     var root = node && node.data && node.data.root;
+
     React.useEffect(function () {
-      if (ref.current && root && annotateToolDiffs) annotateToolDiffs(ref.current, root);
+      if (!ref.current) return;
+      if (root && annotateToolDiffs) annotateToolDiffs(ref.current, root);
+      // Tool calls stream in progressively; re-annotate whenever the tree
+      // mutates so late-arriving resultViews still get their badge.
+      var obs = new MutationObserver(function () {
+        if (root && annotateToolDiffs) annotateToolDiffs(ref.current, root);
+      });
+      obs.observe(ref.current, { childList: true, subtree: true, characterData: true });
+      return function () { obs.disconnect(); };
     }, [root, officialRenderer, annotateToolDiffs]);
+
     if (!officialRenderer) return null;
     return React.createElement(
       'div',

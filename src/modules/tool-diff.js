@@ -55,6 +55,34 @@ function diffStats(block) {
   return { added: added, deleted: deleted }
 }
 
+function diffPath(block) {
+  if (!block) return null
+  var view = 'kind' in block
+    ? (block.resultView || block.callView || null)
+    : (block.callView || null)
+  if (view && view.card === 'diff' && Array.isArray(view.diffs) && view.diffs.length && typeof view.diffs[0].path === 'string') {
+    return view.diffs[0].path
+  }
+  var args = toolArgs(block)
+  if (args) return args.file_path || args.path || null
+  return null
+}
+
+function normalizePathText(value) {
+  return String(value || '').trim().replace(/[\\/]+/g, '/').replace(/\/+$/, '')
+}
+
+function findPathTarget(row, path) {
+  if (!row || !path) return null
+  var normalized = normalizePathText(path)
+  var els = row.querySelectorAll('button, [role="button"], a, span')
+  for (var i = 0; i < els.length; i++) {
+    var el = els[i]
+    if (normalizePathText(el.textContent || '') === normalized) return el
+  }
+  return null
+}
+
 function collectBlocks(block, out) {
   if (!block) return
   out[block.callId] = block
@@ -107,8 +135,9 @@ function annotateToolDiffs(rootEl, root) {
       if (oldEl.parentNode) oldEl.parentNode.removeChild(oldEl)
     }
 
-    var link = row.querySelector('.fileLink')
-    var target = link || row.querySelector('.summary')
+    var path = diffPath(block)
+    var link = row.querySelector('[class*="fileLink"]')
+    var target = link || findPathTarget(row, path) || row.querySelector('[class*="summary"]')
     if (!target || !target.parentNode) continue
     // Keep the path sized to its text so the badge sits directly after it
     // instead of being pushed to the right edge by the row's fill layout.
