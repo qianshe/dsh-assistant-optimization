@@ -111,16 +111,41 @@ const SUB_CONTENT = [
   assert.ok(rootAt < subAt, 'the root file must come before the nested one')
 }
 
-// 5. CLAUDE.md duplicates AGENTS.md and is skipped.
+// 5. CLAUDE.md yields to AGENTS.md in the same directory, but stands in when
+//    AGENTS.md is absent — a project may ship only CLAUDE.md.
 {
-  const out = context.readInstructions([
+  const both = context.readInstructions([
     contextNode([
       { path: 'CLAUDE.md', content: '# Claude\n- Duplicate doc rule' },
       { path: 'AGENTS.md', content: PROJECT_CONTENT },
     ]),
   ])
-  assert.ok(!out.includes('Duplicate doc rule'), 'CLAUDE.md must be skipped')
-  assert.ok(out.includes('Architecture'), 'AGENTS.md must still be read')
+  assert.ok(!both.includes('Duplicate doc rule'), 'CLAUDE.md must yield to AGENTS.md')
+  assert.ok(both.includes('Architecture'), 'AGENTS.md must be read')
+  assert.equal(both.split('\n').length, 1, 'one directory contributes one doc')
+
+  const claudeOnly = context.readInstructions([
+    contextNode([{ path: 'CLAUDE.md', content: '# Claude\n- Claude only rule' }]),
+  ])
+  assert.ok(claudeOnly.includes('Claude only rule'), 'CLAUDE.md stands in when AGENTS.md is absent')
+
+  // Order within a message must not matter.
+  const reversed = context.readInstructions([
+    contextNode([
+      { path: 'AGENTS.md', content: PROJECT_CONTENT },
+      { path: 'CLAUDE.md', content: '# Claude\n- Duplicate doc rule' },
+    ]),
+  ])
+  assert.ok(!reversed.includes('Duplicate doc rule'), 'AGENTS.md wins regardless of section order')
+
+  // Each directory decides independently.
+  const perDir = context.readInstructions([
+    contextNode([
+      { path: 'AGENTS.md', content: PROJECT_CONTENT },
+      { path: 'src/CLAUDE.md', content: '# Sub\n- Nested claude rule', additional: true },
+    ]),
+  ])
+  assert.ok(perDir.includes('Nested claude rule'), 'a nested directory may contribute CLAUDE.md')
 }
 
 // 6. A later context message supersedes an earlier one for the same file.
@@ -196,11 +221,13 @@ const SUB_CONTENT = [
 
 // 11. readContext degrades safely and never throws on a foreign shape.
 {
-  assert.deepEqual(context.readContext(null, null, null), { project: '', instructions: '', summary: '', history: '' }, 'a null session is safe')
-  assert.deepEqual(context.readContext({ nodes: 'nope' }, null, null), { project: '', instructions: '', summary: '', history: '' }, 'a non-array nodes field is safe')
+  const empty = { project: '', cwd: '', instructions: '', summary: '', history: '' }
+  assert.deepEqual(context.readContext(null, null, null), empty, 'a null session is safe')
+  assert.deepEqual(context.readContext({ nodes: 'nope' }, null, null), empty, 'a non-array nodes field is safe')
   const out = context.readContext({ sessionId: 's1', nodes: [contextNode([{ path: 'AGENTS.md', content: PROJECT_CONTENT }])] }, null, null)
   assert.ok(out.instructions.includes('Architecture'), 'instructions are extracted without session/workspace stores')
   assert.equal(out.project, '', 'project identity is empty without a cwd')
+  assert.equal(out.cwd, '', 'cwd is empty without a session row')
 }
 
 // 12. Caps are enforced.
@@ -212,4 +239,23 @@ const SUB_CONTENT = [
   assert.ok(signals.length <= context.LIMITS.signalsPerFile, 'the per-file signal cap applies')
 }
 
-console.log('context: 12 scenarios passed')
+// 13. cwd rides along so the Host can fall back to reading a file itself.
+{
+  const session = { sessionId: 's1', nodes: [] }
+  const sessions = { byId: { s1: { cwd: 'D:/p/app' } } }
+  assert.equal(context.readCwd(session, sessions), 'D:/p/app', 'the session cwd is reported')
+  assert.equal(context.readCwd(session, null), '', 'no session store yields nothing')
+  assert.equal(context.readCwd({ nodes: [] }, sessions), '', 'no sessionId yields nothing')
+  assert.equal(context.readContext(session, sessions, null).cwd, 'D:/p/app', 'readContext carries cwd')
+}
+
+// 14. docRank fixes the per-directory preference and rejects other docs.
+{
+  assert.equal(context.docRank('AGENTS.md'), 0, 'AGENTS.md is preferred')
+  assert.equal(context.docRank('src/AGENTS.local.md'), 0, 'a local overlay counts as AGENTS')
+  assert.equal(context.docRank('CLAUDE.md'), 1, 'CLAUDE.md is the runner-up')
+  assert.equal(context.docRank('README.md'), -1, 'README never enters the session path')
+  assert.equal(context.docRank('docs/NOTES.md'), -1, 'an unrelated doc is rejected')
+}
+
+console.log('context: 14 scenarios passed')

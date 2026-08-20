@@ -61,6 +61,17 @@ function ensurePlacement(trailing, btn) {
   trailing.insertBefore(btn, primary)
 }
 
+/** Condense the Host's refBytes diagnostic into one tooltip line. */
+function refSummary(refBytes) {
+  if (refBytes === null || typeof refBytes !== 'object') return ''
+  var num = function (v) { return typeof v === 'number' ? v : 0 }
+  var src = typeof refBytes.instructionSource === 'string' ? refBytes.instructionSource : '?'
+  return '上次上下文：project ' + num(refBytes.project) +
+    ' / instructions ' + num(refBytes.instructions) + ' (' + src + ')' +
+    ' / summary ' + num(refBytes.summary) +
+    ' / history ' + num(refBytes.history)
+}
+
 /** POST the draft plus its private reference; the Host runs one non-session call. */
 function requestEnhance(payload, signal) {
   return fetch(ENDPOINT, {
@@ -70,11 +81,14 @@ function requestEnhance(payload, signal) {
     signal: signal,
   }).then(function (res) {
     return res.json().then(function (body) {
-      if (!res.ok || body === null || typeof body !== 'object' || typeof body.text !== 'string') {
-        var reason = body && typeof body.error === 'string' ? body.error : 'HTTP ' + res.status
-        throw new Error(reason)
+      var bag = body !== null && typeof body === 'object' ? body : {}
+      if (!res.ok || typeof bag.text !== 'string') {
+        var reason = typeof bag.error === 'string' ? bag.error : 'HTTP ' + res.status
+        var err = new Error(reason)
+        err.refBytes = bag.refBytes
+        throw err
       }
-      return body.text
+      return { text: bag.text, refBytes: bag.refBytes }
     })
   })
 }
@@ -90,7 +104,8 @@ function createPromptEnhance(React, contextMod) {
     var stateRef = React.useRef({ blocked: true, busy: false })
     var draftRef = React.useRef('')
     var actionsRef = React.useRef(null)
-    var contextRef = React.useRef({ project: '', instructions: '', summary: '', history: '' })
+    var lastRefRef = React.useRef('')
+    var contextRef = React.useRef({ project: '', cwd: '', instructions: '', summary: '', history: '' })
 
     var input = props.input || {}
     var draft = typeof input.draft === 'string' ? input.draft : ''
@@ -187,16 +202,26 @@ function createPromptEnhance(React, contextMod) {
         icon.style.display = ''
       }
 
+      /** Idle tooltip carries the last context sizes, for diagnosis. */
+      var idleTitle = function () {
+        var diag = lastRefRef.current
+        return diag === '' ? IDLE_TITLE : IDLE_TITLE + '\n' + diag
+      }
+
       var settle = function (ok, why) {
         clearSettle()
         icon.setAttribute('d', ok ? PATH_CHECK : PATH_SPARKLE)
         btn.style.color = ok
           ? 'var(--dsw-alias-state-success-primary)'
           : 'var(--dsw-alias-state-error-primary)'
-        btn.title = ok ? IDLE_TITLE : 'Prompt 增强失败：' + why
+        var diag = lastRefRef.current
+        btn.title = ok
+          ? idleTitle()
+          : 'Prompt 增强失败：' + why + (diag === '' ? '' : '\n' + diag)
         settleTimer = setTimeout(function () {
           icon.setAttribute('d', PATH_SPARKLE)
           btn.style.color = IDLE_COLOR
+          btn.title = idleTitle()
           settleTimer = null
         }, ok ? 1400 : 2600)
       }
@@ -226,13 +251,16 @@ function createPromptEnhance(React, contextMod) {
         requestEnhance({
           text: text,
           project: ref.project,
+          cwd: ref.cwd,
           instructions: ref.instructions,
           summary: ref.summary,
           history: ref.history,
-        }, controller.signal).then(function (next) {
-          if (next.trim() !== '') actions.setDraft(next)
+        }, controller.signal).then(function (reply) {
+          if (reply.text.trim() !== '') actions.setDraft(reply.text)
+          lastRefRef.current = refSummary(reply.refBytes)
           settle(true, '')
         }).catch(function (err) {
+          lastRefRef.current = refSummary(err && err.refBytes)
           settle(false, err && err.message ? err.message : String(err))
         }).then(function () {
           stateRef.current.busy = false
@@ -275,4 +303,5 @@ function createPromptEnhance(React, contextMod) {
 exports.createPromptEnhance = createPromptEnhance
 exports.ensurePlacement = ensurePlacement
 exports.findPrimary = findPrimary
+exports.refSummary = refSummary
 exports.ENDPOINT = ENDPOINT

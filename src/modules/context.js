@@ -104,9 +104,24 @@ function isGlobalPath(path) {
   return false
 }
 
-/** CLAUDE.md duplicates AGENTS.md in practice; keep one voice per directory. */
-function isDuplicateDoc(path) {
-  return /(?:^|[\\/])CLAUDE(?:\.local)?\.md$/i.test(path)
+function dirOf(path) {
+  var at = path.replace(/\\/g, '/').lastIndexOf('/')
+  return at < 0 ? '.' : path.slice(0, at)
+}
+
+/**
+ * Rank one instruction candidate within its directory. DSH probes AGENTS.md
+ * before CLAUDE.md and loads both when both exist, but they say the same thing
+ * for different agents, so only the preferred one is kept per directory.
+ * README.md never reaches the session context — the Host reads it as a last
+ * resort when no instruction file exists at all.
+ * @returns 0 for AGENTS.md, 1 for CLAUDE.md, -1 for anything else.
+ */
+function docRank(path) {
+  var name = path.replace(/\\/g, '/').split('/').pop()
+  if (/^AGENTS(?:\.local)?\.md$/i.test(name)) return 0
+  if (/^CLAUDE(?:\.local)?\.md$/i.test(name)) return 1
+  return -1
 }
 
 /**
@@ -146,7 +161,8 @@ function structureSignals(lines) {
 
 /**
  * Project-scoped instruction structure, ordered broadest → most specific.
- * The user-global file and duplicate docs are excluded.
+ * The user-global file is excluded, and each directory contributes one doc:
+ * AGENTS.md when present, otherwise CLAUDE.md.
  */
 function readInstructions(nodes) {
   var files = []
@@ -161,16 +177,33 @@ function readInstructions(nodes) {
     for (var s = 0; s < sections.length; s++) {
       var section = sections[s]
       if (isGlobalPath(section.path)) continue
-      if (isDuplicateDoc(section.path)) continue
+      var rank = docRank(section.path)
+      if (rank < 0) continue
       var signals = structureSignals(section.lines)
       if (signals.length === 0) continue
+
       // A later context message supersedes an earlier one for the same file.
       if (seen[section.path] !== undefined) {
-        files[seen[section.path]] = { path: section.path, signals: signals }
+        files[seen[section.path]].signals = signals
         continue
       }
+
+      // One doc per directory: AGENTS.md wins over CLAUDE.md.
+      var dir = dirOf(section.path)
+      var replaced = false
+      for (var f = 0; f < files.length; f++) {
+        if (files[f].dir !== dir) continue
+        if (rank >= files[f].rank) { replaced = true; break }
+        delete seen[files[f].path]
+        files[f] = { path: section.path, dir: dir, rank: rank, signals: signals }
+        seen[section.path] = f
+        replaced = true
+        break
+      }
+      if (replaced) continue
+
       seen[section.path] = files.length
-      files.push({ path: section.path, signals: signals })
+      files.push({ path: section.path, dir: dir, rank: rank, signals: signals })
     }
   }
 
@@ -183,8 +216,8 @@ function readInstructions(nodes) {
   })
 
   var parts = []
-  for (var f = 0; f < files.length; f++) {
-    parts.push(files[f].path + ': ' + files[f].signals.join('; '))
+  for (var p = 0; p < files.length; p++) {
+    parts.push(files[p].path + ': ' + files[p].signals.join('; '))
   }
   return compact(parts.join('\n'), LIMITS.instructionsTotal)
 }
@@ -223,16 +256,19 @@ function readHistory(nodes) {
   return picked.join('\n')
 }
 
+/** The session's workspace root, or '' when the session list has no row for it. */
+function readCwd(session, sessions) {
+  var sessionId = session !== null && typeof session === 'object' ? session.sessionId : undefined
+  if (sessions === null || typeof sessions !== 'object' || sessionId === undefined) return ''
+  var byId = sessions.byId
+  var row = byId !== null && typeof byId === 'object' ? byId[sessionId] : undefined
+  if (row === null || typeof row !== 'object' || typeof row.cwd !== 'string') return ''
+  return row.cwd
+}
+
 /** Workspace identity for the session, or '' when it cannot be resolved. */
 function readProject(session, sessions, workspaces) {
-  var cwd = ''
-  var sessionId = session !== null && typeof session === 'object' ? session.sessionId : undefined
-
-  if (sessions !== null && typeof sessions === 'object' && sessionId !== undefined) {
-    var byId = sessions.byId
-    var row = byId !== null && typeof byId === 'object' ? byId[sessionId] : undefined
-    if (row !== null && typeof row === 'object' && typeof row.cwd === 'string') cwd = row.cwd
-  }
+  var cwd = readCwd(session, sessions)
 
   var title = ''
   if (workspaces !== null && typeof workspaces === 'object' && Array.isArray(workspaces.items) && cwd !== '') {
@@ -259,15 +295,22 @@ function readProject(session, sessions, workspaces) {
 
 /**
  * Build the enhancer's private reference from live slot props.
+ *
+ * `cwd` rides along so the Host can fall back to reading an instruction file
+ * itself: the conversation window may have scrolled the instruction context out
+ * of `nodes`, and a project may have no instruction file at all (in which case
+ * README.md is the last resort — the Host owns that read).
+ *
  * Returns owned JSON: no Host object, snapshot, or node is retained.
  */
 function readContext(session, sessions, workspaces) {
-  var empty = { project: '', instructions: '', summary: '', history: '' }
+  var empty = { project: '', cwd: '', instructions: '', summary: '', history: '' }
   if (session === null || typeof session !== 'object') return empty
   var nodes = Array.isArray(session.nodes) ? session.nodes : null
   if (nodes === null) return empty
   return {
     project: readProject(session, sessions, workspaces),
+    cwd: readCwd(session, sessions),
     instructions: readInstructions(nodes),
     summary: readSummary(nodes),
     history: readHistory(nodes),
@@ -279,6 +322,8 @@ exports.readInstructions = readInstructions
 exports.readSummary = readSummary
 exports.readHistory = readHistory
 exports.readProject = readProject
+exports.readCwd = readCwd
 exports.structureSignals = structureSignals
 exports.splitSections = splitSections
+exports.docRank = docRank
 exports.LIMITS = LIMITS

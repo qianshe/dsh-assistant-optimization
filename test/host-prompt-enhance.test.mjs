@@ -219,4 +219,99 @@ const defaultModel = { currentSelection: () => selection }
   assert.ok(sent.includes('<user_draft>'), 'the draft is still framed')
 }
 
-console.log('host-prompt-enhance: 13 scenarios passed')
+// 14. refBytes reports what the model actually received, so an unhelpful
+//     rewrite can be attributed to thin context rather than guessed at.
+{
+  const route = mount({ llm: llmStub(), agentDefaultModel: defaultModel })
+  const res = await call(route, {
+    body: { text: 'hi', project: 'P', instructions: 'AGENTS.md: A; B', summary: 'sum', history: 'User: x' },
+  })
+  assert.equal(res.body.refBytes.project, 1, 'project size is reported')
+  assert.equal(res.body.refBytes.instructions, 'AGENTS.md: A; B'.length, 'instruction size is reported')
+  assert.equal(res.body.refBytes.summary, 3, 'summary size is reported')
+  assert.equal(res.body.refBytes.instructionSource, 'session', 'a snapshot-supplied outline reports its source')
+}
+
+// 15. With no instructions from the snapshot, the Host reads a file itself in
+//     preference order: AGENTS.md, then CLAUDE.md, then README.md.
+{
+  /** An fs stub exposing only the files it is given. */
+  function fsStub(files) {
+    return {
+      resolve: async (name, opts) => {
+        if (files[name] === undefined) throw new Error('ENOENT');
+        return { key: `${opts.cwd}/${name}`, name }
+      },
+      stat: async (target) => ({ size: Buffer.byteLength(files[target.name], 'utf8') }),
+      readText: async (target) => files[target.name],
+    }
+  }
+
+  const doc = '# Title\n\n## Section\n- **Rule name**: explanation prose\n'
+
+  // AGENTS.md wins when present.
+  {
+    const route = mount({
+      llm: llmStub(), agentDefaultModel: defaultModel,
+      fs: fsStub({ 'AGENTS.md': doc, 'CLAUDE.md': '# Claude\n- Claude rule: x', 'README.md': '# Readme\n- Readme rule: y' }),
+    })
+    const res = await call(route, { body: { text: 'hi', cwd: 'D:/p' } })
+    assert.equal(res.body.refBytes.instructionSource, 'AGENTS.md', 'AGENTS.md is read first')
+    assert.ok(res.body.refBytes.instructions > 0, 'the fallback fills the outline')
+  }
+
+  // CLAUDE.md stands in when AGENTS.md is absent.
+  {
+    const route = mount({
+      llm: llmStub(), agentDefaultModel: defaultModel,
+      fs: fsStub({ 'CLAUDE.md': doc, 'README.md': '# Readme\n- Readme rule: y' }),
+    })
+    const res = await call(route, { body: { text: 'hi', cwd: 'D:/p' } })
+    assert.equal(res.body.refBytes.instructionSource, 'CLAUDE.md', 'CLAUDE.md is the second choice')
+  }
+
+  // README.md is the last resort.
+  {
+    const route = mount({
+      llm: llmStub(), agentDefaultModel: defaultModel,
+      fs: fsStub({ 'README.md': doc }),
+    })
+    const res = await call(route, { body: { text: 'hi', cwd: 'D:/p' } })
+    assert.equal(res.body.refBytes.instructionSource, 'README.md', 'README.md is read last')
+  }
+
+  // Nothing readable: reported as none, not as a failure.
+  {
+    const route = mount({ llm: llmStub(), agentDefaultModel: defaultModel, fs: fsStub({}) })
+    const res = await call(route, { body: { text: 'hi', cwd: 'D:/p' } })
+    assert.equal(res.status, 200, 'a project with no docs still enhances')
+    assert.equal(res.body.refBytes.instructionSource, 'none', 'the absence is reported')
+    assert.equal(res.body.refBytes.instructions, 0, 'no outline is fabricated')
+  }
+}
+
+// 16. The snapshot outline wins: the fallback read never overrides it.
+{
+  let read = false
+  const route = mount({
+    llm: llmStub(), agentDefaultModel: defaultModel,
+    fs: {
+      resolve: async () => { read = true; return { name: 'AGENTS.md' } },
+      stat: async () => ({ size: 10 }),
+      readText: async () => '# X\n- Y: z',
+    },
+  })
+  const res = await call(route, { body: { text: 'hi', cwd: 'D:/p', instructions: 'AGENTS.md: FromSnapshot' } })
+  assert.equal(read, false, 'no file is read when the snapshot supplied an outline')
+  assert.equal(res.body.refBytes.instructionSource, 'session', 'the source stays session')
+}
+
+// 17. Without ctx.fs the route still works; the outline is simply absent.
+{
+  const route = mount({ llm: llmStub(), agentDefaultModel: defaultModel })
+  const res = await call(route, { body: { text: 'hi', cwd: 'D:/p' } })
+  assert.equal(res.status, 200, 'an absent fs service is not an error')
+  assert.equal(res.body.refBytes.instructionSource, 'none', 'the absence is reported')
+}
+
+console.log('host-prompt-enhance: 17 scenarios passed')
