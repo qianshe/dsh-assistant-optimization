@@ -6,7 +6,8 @@
 // later content more heavily:
 //
 //   1. Workspace identity   title + path
-//   2. Project instructions structure signals from project-scoped AGENTS.md
+//   2. Project instructions structure signals from project-scoped AGENTS.md and
+//                           its .local overlay (CLAUDE.md when no AGENTS exists)
 //   3. Session summary      DSH's own compaction summary, when one exists
 //   4. Recent user asks     what was requested
 //   5. Recent agent results what was finished
@@ -125,18 +126,40 @@ function dirOf(path) {
 }
 
 /**
- * Rank one instruction candidate within its directory. DSH probes AGENTS.md
- * before CLAUDE.md and loads both when both exist, but they say the same thing
- * for different agents, so only the preferred one is kept per directory.
+ * Rank one instruction candidate within its directory.
+ *
+ * DSH probes AGENTS.md before CLAUDE.md, and each of those before its `.local`
+ * overlay. The two families say the same thing for different agents, so only the
+ * preferred family is kept per directory. A `.local` overlay is NOT a duplicate:
+ * it is the personal, usually git-ignored layer beside the shared file, and DSH
+ * injects both — it collapses them only when their trimmed content is identical
+ * (see dedupInstructionFilesByDirectory in dsh-agent-instructions). So the
+ * overlay is kept alongside its base and ordered after it, matching DSH's
+ * "more specific takes precedence" direction.
+ *
  * README.md never reaches the session context — the Host reads it as a last
  * resort when no instruction file exists at all.
- * @returns 0 for AGENTS.md, 1 for CLAUDE.md, -1 for anything else.
+ *
+ * @returns 0 AGENTS.md, 1 AGENTS.local.md, 2 CLAUDE.md, 3 CLAUDE.local.md, -1 other.
  */
 function docRank(path) {
   var name = path.replace(/\\/g, '/').split('/').pop()
-  if (/^AGENTS(?:\.local)?\.md$/i.test(name)) return 0
-  if (/^CLAUDE(?:\.local)?\.md$/i.test(name)) return 1
+  if (/^AGENTS\.md$/i.test(name)) return 0
+  if (/^AGENTS\.local\.md$/i.test(name)) return 1
+  if (/^CLAUDE\.md$/i.test(name)) return 2
+  if (/^CLAUDE\.local\.md$/i.test(name)) return 3
   return -1
+}
+
+/** Which family a ranked candidate belongs to: AGENTS beats CLAUDE per directory. */
+function docFamily(rank) {
+  return rank < 2 ? 'agents' : 'claude'
+}
+
+/** Whether a ranked candidate is the personal overlay rather than the shared file. */
+function isOverlay(rank) {
+  return rank === 1 || rank === 3
+}
 }
 
 /**
@@ -176,8 +199,11 @@ function structureSignals(lines) {
 
 /**
  * Project-scoped instruction structure, ordered broadest → most specific.
- * The user-global file is excluded, and each directory contributes one doc:
- * AGENTS.md when present, otherwise CLAUDE.md.
+ *
+ * The user-global file is excluded. Per directory, one FAMILY wins — AGENTS when
+ * present, otherwise CLAUDE — but that family's shared file and its `.local`
+ * overlay both survive, because the overlay is the personal layer beside the
+ * shared one rather than a duplicate of it.
  */
 function readInstructions(nodes) {
   var files = []
@@ -203,36 +229,43 @@ function readInstructions(nodes) {
         continue
       }
 
-      // One doc per directory: AGENTS.md wins over CLAUDE.md.
-      var dir = dirOf(section.path)
-      var replaced = false
-      for (var f = 0; f < files.length; f++) {
-        if (files[f].dir !== dir) continue
-        if (rank >= files[f].rank) { replaced = true; break }
-        delete seen[files[f].path]
-        files[f] = { path: section.path, dir: dir, rank: rank, signals: signals }
-        seen[section.path] = f
-        replaced = true
-        break
-      }
-      if (replaced) continue
-
-      seen[section.path] = files.length
-      files.push({ path: section.path, dir: dir, rank: rank, signals: signals })
+      files.push({
+        path: section.path,
+        dir: dirOf(section.path),
+        rank: rank,
+        family: docFamily(rank),
+        overlay: isOverlay(rank),
+        signals: signals,
+      })
+      seen[section.path] = files.length - 1
     }
   }
 
-  // Depth order: the project root's file first, deeper directories after, so
-  // the most specific guidance lands last.
-  files.sort(function (a, b) {
-    var da = a.path.split(/[\\/]/).length
-    var db = b.path.split(/[\\/]/).length
-    return da === db ? (a.path < b.path ? -1 : 1) : da - db
+  // One family per directory: a CLAUDE file is dropped where any AGENTS file
+  // exists in the same directory, taking its overlay with it.
+  var agentsDirs = Object.create(null)
+  for (var a = 0; a < files.length; a++) {
+    if (files[a].family === 'agents') agentsDirs[files[a].dir] = true
+  }
+  var chosen = []
+  for (var c = 0; c < files.length; c++) {
+    if (files[c].family === 'claude' && agentsDirs[files[c].dir] === true) continue
+    chosen.push(files[c])
+  }
+
+  // Depth first so the project root leads and nested directories land last, then
+  // rank so a directory's shared file precedes its personal overlay.
+  chosen.sort(function (x, y) {
+    var dx = x.path.split(/[\\/]/).length
+    var dy = y.path.split(/[\\/]/).length
+    if (dx !== dy) return dx - dy
+    if (x.dir !== y.dir) return x.dir < y.dir ? -1 : 1
+    return x.rank - y.rank
   })
 
   var parts = []
-  for (var p = 0; p < files.length; p++) {
-    parts.push(files[p].path + ': ' + files[p].signals.join('; '))
+  for (var p = 0; p < chosen.length; p++) {
+    parts.push(chosen[p].path + ': ' + chosen[p].signals.join('; '))
   }
   return compact(parts.join('\n'), LIMITS.instructionsTotal)
 }
@@ -450,6 +483,8 @@ exports.readCwd = readCwd
 exports.structureSignals = structureSignals
 exports.splitSections = splitSections
 exports.docRank = docRank
+exports.docFamily = docFamily
+exports.isOverlay = isOverlay
 exports.stripLiteralBlocks = stripLiteralBlocks
 exports.hasQuantity = hasQuantity
 exports.LIMITS = LIMITS

@@ -111,8 +111,8 @@ const SUB_CONTENT = [
   assert.ok(rootAt < subAt, 'the root file must come before the nested one')
 }
 
-// 5. CLAUDE.md yields to AGENTS.md in the same directory, but stands in when
-//    AGENTS.md is absent — a project may ship only CLAUDE.md.
+// 5. Per directory, one FAMILY wins: CLAUDE yields to AGENTS but stands in when
+//    no AGENTS file exists. Family selection takes the overlay with it.
 {
   const both = context.readInstructions([
     contextNode([
@@ -122,7 +122,7 @@ const SUB_CONTENT = [
   ])
   assert.ok(!both.includes('Duplicate doc rule'), 'CLAUDE.md must yield to AGENTS.md')
   assert.ok(both.includes('Architecture'), 'AGENTS.md must be read')
-  assert.equal(both.split('\n').length, 1, 'one directory contributes one doc')
+  assert.equal(both.split('\n').length, 1, 'one family per directory')
 
   const claudeOnly = context.readInstructions([
     contextNode([{ path: 'CLAUDE.md', content: '# Claude\n- Claude only rule' }]),
@@ -138,6 +138,17 @@ const SUB_CONTENT = [
   ])
   assert.ok(!reversed.includes('Duplicate doc rule'), 'AGENTS.md wins regardless of section order')
 
+  // Losing a family drops its overlay too.
+  const withOverlay = context.readInstructions([
+    contextNode([
+      { path: 'CLAUDE.md', content: '# C\n- Claude rule: x' },
+      { path: 'CLAUDE.local.md', content: '# CL\n- Claude local: y' },
+      { path: 'AGENTS.md', content: PROJECT_CONTENT },
+    ]),
+  ])
+  assert.ok(!withOverlay.includes('Claude local'), "the losing family's overlay is dropped too")
+  assert.equal(withOverlay.split('\n').length, 1, 'only the winning family remains')
+
   // Each directory decides independently.
   const perDir = context.readInstructions([
     contextNode([
@@ -146,6 +157,37 @@ const SUB_CONTENT = [
     ]),
   ])
   assert.ok(perDir.includes('Nested claude rule'), 'a nested directory may contribute CLAUDE.md')
+}
+
+// 5b. A `.local` overlay is the personal layer beside the shared file, not a
+//     duplicate of it. DSH injects both and collapses them only when their
+//     trimmed content matches, so both survive here, base first — the overlay is
+//     the more specific of the two.
+{
+  const out = context.readInstructions([
+    contextNode([
+      { path: 'AGENTS.local.md', content: '# Local\n- 本机环境: proxy on 7897' },
+      { path: 'AGENTS.md', content: PROJECT_CONTENT },
+    ]),
+  ])
+  const lines = out.split('\n')
+  assert.equal(lines.length, 2, 'the shared file and its overlay both survive')
+  assert.ok(lines[0].startsWith('AGENTS.md:'), 'the shared file comes first')
+  assert.ok(lines[1].startsWith('AGENTS.local.md:'), 'the personal overlay comes last')
+  assert.ok(out.includes('Architecture'), 'shared signals are kept')
+  assert.ok(out.includes('本机环境'), 'overlay signals are kept')
+
+  // A nested overlay still sorts after its own directory's shared file, and both
+  // sort after the project root.
+  const nested = context.readInstructions([
+    contextNode([
+      { path: 'src/AGENTS.local.md', content: '# SL\n- Nested local: a', additional: true },
+      { path: 'src/AGENTS.md', content: '# S\n- Nested shared: b', additional: true },
+      { path: 'AGENTS.md', content: PROJECT_CONTENT },
+    ]),
+  ])
+  const order = nested.split('\n').map((line) => line.split(':')[0])
+  assert.deepEqual(order, ['AGENTS.md', 'src/AGENTS.md', 'src/AGENTS.local.md'], 'root, then nested shared, then nested overlay')
 }
 
 // 6. A later context message supersedes an earlier one for the same file.
@@ -256,10 +298,21 @@ const SUB_CONTENT = [
 // 14. docRank fixes the per-directory preference and rejects other docs.
 {
   assert.equal(context.docRank('AGENTS.md'), 0, 'AGENTS.md is preferred')
-  assert.equal(context.docRank('src/AGENTS.local.md'), 0, 'a local overlay counts as AGENTS')
-  assert.equal(context.docRank('CLAUDE.md'), 1, 'CLAUDE.md is the runner-up')
+  assert.equal(context.docRank('src/AGENTS.local.md'), 1, 'the AGENTS overlay ranks after its base')
+  assert.equal(context.docRank('CLAUDE.md'), 2, 'CLAUDE.md is the runner-up family')
+  assert.equal(context.docRank('CLAUDE.local.md'), 3, 'the CLAUDE overlay ranks last')
   assert.equal(context.docRank('README.md'), -1, 'README never enters the session path')
   assert.equal(context.docRank('docs/NOTES.md'), -1, 'an unrelated doc is rejected')
+
+  assert.equal(context.docFamily(0), 'agents', 'AGENTS.md is the agents family')
+  assert.equal(context.docFamily(1), 'agents', 'its overlay is the same family')
+  assert.equal(context.docFamily(2), 'claude', 'CLAUDE.md is the claude family')
+  assert.equal(context.docFamily(3), 'claude', 'its overlay is the same family')
+
+  assert.equal(context.isOverlay(0), false, 'a shared file is not an overlay')
+  assert.equal(context.isOverlay(1), true, 'AGENTS.local.md is an overlay')
+  assert.equal(context.isOverlay(2), false, 'CLAUDE.md is not an overlay')
+  assert.equal(context.isOverlay(3), true, 'CLAUDE.local.md is an overlay')
 }
 
 // 15. stripLiteralBlocks removes where transient literals live, and keeps the
@@ -370,4 +423,5 @@ const SUB_CONTENT = [
   assert.ok(one.length <= context.LIMITS.replyItem + 1, 'the per-reply cap applies')
 }
 
-console.log('context: 19 scenarios passed')
+console.log('context: 20 scenarios passed')
+
