@@ -62,6 +62,17 @@ function apply(ctx) {
     );
   });
 
-  // 3. Mermaid post-processor
+  // 3. Prompt enhance button. Registered in conversation.input.right, which
+  //    renders BEFORE the model select and context meter — the component only
+  //    drops a hidden anchor there and inserts its own DOM button just left of
+  //    the send button, since no slot exists at that exact position.
+  slots.inject("conversation.input.right", function () {
+    return slots.register(
+      { name: "conversation.input.right", id: "dsao-prompt-enhance", order: 100, locale: "conversation" },
+      PromptEnhanceMount
+    );
+  });
+
+  // 4. Mermaid post-processor
   ctx.effect(function () { return startMermaidObserver(); });
 }

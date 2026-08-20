@@ -27,15 +27,27 @@ class StubElement {
     return name in this.attrs ? this.attrs[name] : null
   }
 
+  /** Detach from the current parent, the way live DOM insertion relocates a node. */
+  detach() {
+    if (this.parent !== null) this.parent.removeChild(this)
+    return this
+  }
+
   appendChild(node) {
+    node.detach()
     node.parent = this
     this.children.push(node)
     return node
   }
 
   insertBefore(node, ref) {
+    if (ref !== null && ref !== undefined && this.children.indexOf(ref) < 0) {
+      throw new Error('insertBefore: reference node is not a child')
+    }
+    // Detach BEFORE resolving the index: relocating a node inside the same
+    // parent shifts every position after it.
+    node.detach()
     const at = ref === null || ref === undefined ? this.children.length : this.children.indexOf(ref)
-    if (at < 0) throw new Error('insertBefore: reference node is not a child')
     node.parent = this
     this.children.splice(at, 0, node)
     return node

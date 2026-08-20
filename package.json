@@ -1,7 +1,7 @@
 {
   "name": "dsh-assistant-optimization",
-  "version": "1.1.0",
-  "description": "Fold mis-rendered thinking/reasoning content into collapsible blocks and render mermaid diagrams inline.",
+  "version": "1.2.0",
+  "description": "Fold mis-rendered thinking content into collapsible blocks, render mermaid inline, show file-edit diff counts, and rewrite composer drafts with the current model.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -28,7 +28,8 @@
     "cordis",
     "thinking",
     "reasoning",
-    "mermaid"
+    "mermaid",
+    "prompt"
   ],
   "dsh": {
     "bundle": {
