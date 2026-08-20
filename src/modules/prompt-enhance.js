@@ -73,6 +73,25 @@ function refSummary(refBytes) {
     ' / results ' + num(refBytes.replies)
 }
 
+/**
+ * Read a response body without letting a parse error hide the real cause.
+ *
+ * The webserver's fallback answers 404 with the plain text "not found", so a
+ * bare res.json() throws "Unexpected token 'o'" and buries the actual fact:
+ * the route was never registered.
+ */
+function readBody(res) {
+  return res.text().then(function (raw) {
+    try {
+      var parsed = JSON.parse(raw)
+      return parsed !== null && typeof parsed === 'object' ? parsed : {}
+    } catch (e) {
+      var snippet = raw.replace(/\s+/g, ' ').trim().slice(0, 80)
+      return { error: 'HTTP ' + res.status + (snippet === '' ? '' : ': ' + snippet) }
+    }
+  })
+}
+
 /** POST the draft plus its private reference; the Host runs one non-session call. */
 function requestEnhance(payload, signal) {
   return fetch(ENDPOINT, {
@@ -81,8 +100,7 @@ function requestEnhance(payload, signal) {
     body: JSON.stringify(payload),
     signal: signal,
   }).then(function (res) {
-    return res.json().then(function (body) {
-      var bag = body !== null && typeof body === 'object' ? body : {}
+    return readBody(res).then(function (bag) {
       if (!res.ok || typeof bag.text !== 'string') {
         var reason = typeof bag.error === 'string' ? bag.error : 'HTTP ' + res.status
         var err = new Error(reason)

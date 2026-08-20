@@ -1,23 +1,31 @@
-// Verify the host prompt-enhance route: loopback fence, method/input guards,
-// missing-service reporting, and the single non-session model call.
+// Verify the host prompt-enhance route: the webServer hard dependency, the
+// loopback fence, method/input guards, missing-service reporting, and the single
+// non-session model call.
 // Run: node test/host-prompt-enhance.test.mjs
 import assert from 'node:assert/strict'
-import { apply } from '../lib/index.js'
+import { apply, inject } from '../lib/index.js'
 
-/** Capture the route the plugin registers. */
+/**
+ * Capture the route the plugin registers.
+ *
+ * `webServer` arrives as a context PROPERTY, not through ctx.get: it is declared
+ * in `inject`, so Cordis holds the plugin in waiting until the service exists
+ * and then exposes it as ctx.webServer. Probing it with ctx.get instead let the
+ * plugin mount before the service was available, silently skipping registration.
+ */
 function mount(services) {
   let route
-  const ctx = {
-    get: (name) => services[name],
-    effect: (callback) => callback(),
-  }
   const webServer = {
     register: (r) => {
       route = r
       return () => {}
     },
   }
-  apply({ ...ctx, get: (name) => (name === 'webServer' ? webServer : services[name]) })
+  apply({
+    webServer,
+    get: (name) => services[name],
+    effect: (callback) => callback(),
+  })
   return route
 }
 
@@ -65,11 +73,28 @@ function llmStub({ deltas = ['rewritten'], reason = 'stop', failure, capture } =
 const selection = { provider: 'deepseek', model: 'deepseek-v4-flash' }
 const defaultModel = { currentSelection: () => selection }
 
-// 0. The route claims the documented path with an exact match.
+// 0. webServer is declared as a hard dependency, and the route claims the
+//    documented path with an exact match.
+//
+//    The inject assertion is the regression guard for a real failure: the plugin
+//    probed webServer with ctx.get, mounted before that service existed, and
+//    returned without registering. Every request then fell through to the
+//    webserver's plain-text 404, so the button reported a JSON parse error and
+//    the missing registration stayed invisible. Row order in the composed tree
+//    does not substitute for the declaration.
 {
+  assert.ok(Array.isArray(inject), 'the plugin must export an inject list')
+  assert.ok(inject.includes('webServer'), 'webServer must be a declared hard dependency')
+
   const route = mount({})
   assert.equal(route.kind, 'exact', 'route must be an exact match')
   assert.equal(route.path, '/api/dsao/prompt-enhance', 'route path must match the client endpoint')
+
+  // The optional services must stay optional: the route has to answer with a
+  // readable error when they are absent rather than fail to mount.
+  for (const optional of ['llm', 'agentDefaultModel', 'fs']) {
+    assert.ok(!inject.includes(optional), `${optional} must stay optional`)
+  }
 }
 
 // 1. A non-loopback caller is refused before any service is touched.
