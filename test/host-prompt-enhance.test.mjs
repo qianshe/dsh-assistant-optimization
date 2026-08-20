@@ -43,14 +43,20 @@ function call(route, { method = 'POST', remoteAddress = '127.0.0.1', body } = {}
   }))
 }
 
-/** An llm stub whose stream yields text deltas then a finish chunk. */
-function llmStub({ deltas = ['rewritten'], reason = 'stop', capture } = {}) {
+/**
+ * An llm stub whose stream yields text deltas then a finish chunk.
+ * A FinishReason is an OBJECT, so `reason` is a kind string wrapped here.
+ */
+function llmStub({ deltas = ['rewritten'], reason = 'stop', failure, capture } = {}) {
   return {
     stream(options) {
       if (capture !== undefined) capture(options)
       return (async function* () {
         for (const text of deltas) yield { type: 'text-delta', index: 0, text }
-        yield { type: 'finish', reason }
+        yield {
+          type: 'finish',
+          reason: failure === undefined ? { kind: reason } : { kind: reason, failure },
+        }
       })()
     },
   }
@@ -115,7 +121,7 @@ const defaultModel = { currentSelection: () => selection }
   assert.equal(options.sessionId, undefined, 'the call must not be bound to a session')
   assert.equal(options.messages.length, 1, 'exactly one user message')
   assert.equal(options.messages[0].role, 'user', 'the draft rides a user message')
-  assert.equal(options.messages[0].content[0].text, '帮我改一下这个函数', 'the draft must be passed verbatim')
+  assert.ok(options.messages[0].content[0].text.includes('帮我改一下这个函数'), 'the draft must be passed verbatim')
   assert.equal(typeof options.system, 'string', 'a system prompt must be supplied')
 }
 
@@ -126,25 +132,91 @@ const defaultModel = { currentSelection: () => selection }
   assert.equal(res.status, 413, 'an oversized draft must be refused')
 }
 
-// 7. A non-stop finish reason surfaces as a failure, not as empty text.
+// 7. A failing finish reason with no text surfaces its readable failure.
 {
-  const route = mount({ llm: llmStub({ deltas: ['partial'], reason: 'error' }), agentDefaultModel: defaultModel })
+  const route = mount({
+    llm: llmStub({ deltas: [], reason: 'error', failure: { message: 'rate limited', code: 'RATE_LIMIT', status: 429 } }),
+    agentDefaultModel: defaultModel,
+  })
   const res = await call(route, { body: { text: 'hi' } })
   assert.equal(res.status, 502, 'a failed model call must report 502')
+  assert.match(res.body.error, /rate limited/, 'the provider message must reach the caller')
+  assert.match(res.body.error, /HTTP 429/, 'the provider status must reach the caller')
+  assert.ok(!res.body.error.includes('[object Object]'), 'the finish reason must not be stringified as an object')
 }
 
-// 8. A model that returns nothing is reported rather than clearing the draft.
+// 8. Text already collected wins over a late failure.
+{
+  const route = mount({
+    llm: llmStub({ deltas: ['usable rewrite'], reason: 'error', failure: { message: 'stream broke', code: 'X' } }),
+    agentDefaultModel: defaultModel,
+  })
+  const res = await call(route, { body: { text: 'hi' } })
+  assert.equal(res.status, 200, 'a truncated but usable rewrite must be returned')
+  assert.equal(res.body.text, 'usable rewrite', 'the collected text is returned')
+}
+
+// 9. max-tokens is a clean truncation, not a failure.
+{
+  const route = mount({ llm: llmStub({ deltas: ['cut short'], reason: 'max-tokens' }), agentDefaultModel: defaultModel })
+  const res = await call(route, { body: { text: 'hi' } })
+  assert.equal(res.status, 200, 'max-tokens must not be treated as a failure')
+}
+
+// 10. A model that returns nothing is reported rather than clearing the draft.
 {
   const route = mount({ llm: llmStub({ deltas: [] }), agentDefaultModel: defaultModel })
   const res = await call(route, { body: { text: 'hi' } })
   assert.equal(res.status, 502, 'empty model output must report 502')
 }
 
-// 9. No model selected is reported as 503.
+// 11. No model selected is reported as 503.
 {
   const route = mount({ llm: llmStub(), agentDefaultModel: { currentSelection: () => undefined } })
   const res = await call(route, { body: { text: 'hi' } })
   assert.equal(res.status, 503, 'an absent selection must report 503')
 }
 
-console.log('host-prompt-enhance: 10 scenarios passed')
+// 12. The private reference is assembled broadest → most specific, and the
+//     draft stays last so the model weighs it most heavily.
+{
+  let options
+  const route = mount({
+    llm: llmStub({ capture: (o) => { options = o } }),
+    agentDefaultModel: defaultModel,
+  })
+  const res = await call(route, {
+    body: {
+      text: 'fix the badge color',
+      project: 'DSAO (D:/p/dsao)',
+      instructions: 'AGENTS.md: Architecture; Verification',
+      summary: 'earlier we moved the badge to the toolview slot',
+      history: 'User: make it dimmer\nAgent: done',
+    },
+  })
+  assert.equal(res.status, 200, 'a request carrying context must succeed')
+
+  const sent = options.messages[0].content[0].text
+  assert.ok(sent.includes('<private_reference>'), 'the reference is framed')
+  const order = ['Project: DSAO', 'Project instruction outline', 'Earlier session summary', 'Recent conversation', '<user_draft>']
+  let at = -1
+  for (const marker of order) {
+    const next = sent.indexOf(marker)
+    assert.ok(next > at, `${marker} must follow the previous part`)
+    at = next
+  }
+  assert.ok(sent.indexOf('</private_reference>') < sent.indexOf('<user_draft>'), 'the draft sits outside the reference')
+  assert.ok(sent.includes('non-output context'), 'the non-output contract is stated')
+}
+
+// 13. Absent context parts are omitted entirely rather than framed empty.
+{
+  let options
+  const route = mount({ llm: llmStub({ capture: (o) => { options = o } }), agentDefaultModel: defaultModel })
+  await call(route, { body: { text: 'plain draft' } })
+  const sent = options.messages[0].content[0].text
+  assert.ok(!sent.includes('<private_reference>'), 'no reference frame without context')
+  assert.ok(sent.includes('<user_draft>'), 'the draft is still framed')
+}
+
+console.log('host-prompt-enhance: 13 scenarios passed')

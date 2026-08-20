@@ -9,12 +9,14 @@
 // multi-registration to achieve the same split at runtime.
 //
 // Module dependencies:
-//   markers.js    — localStorage marker CRUD
-//   text-split.js — splitText + transformBlocks
-//   tool-diff.js  — file-edit diff line count badges (ensureBadge 幂等注入)
-//   wrapper.js    — WrappedAssistantStep / WrappedToolCallRow + official renderer finders
-//   mermaid.js    — MutationObserver + SVG rendering
-//   settings.js   — TagsSetting React component
+//   markers.js        — localStorage marker CRUD
+//   text-split.js     — splitText + transformBlocks
+//   tool-diff.js      — file-edit diff line count badges (ensureBadge 幂等注入)
+//   wrapper.js        — WrappedAssistantStep / WrappedToolCallRow + official renderer finders
+//   context.js        — private-reference extraction (project / instructions / summary / history)
+//   prompt-enhance.js — composer button + placement
+//   mermaid.js        — MutationObserver + SVG rendering
+//   settings.js       — TagsSetting React component
 //
 // See lib/client.js for the assembled static version.
 
