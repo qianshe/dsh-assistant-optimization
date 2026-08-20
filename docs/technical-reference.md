@@ -213,9 +213,10 @@ FileMutationRow
 | **v1 (debug-1)** | `conversation.chat.node` key `tool-call` | `priority: 1` | ❌ priority 1 > 0，从不渲染 |
 | **v1 (debug-2/3)** | `conversation.chat.node` key `tool-call` | `priority: -1` | ❌ 声明 children 与官方冲突 |
 | **v1 (debug-4)** | `tool.call.toolview` key `write/edit` | `priority: -1` | ❌ 卡死（MutationObserver 自触发） |
-| **v3 (final)** | `tool.call.toolview` key `write/edit` | `priority: -1` | ✅ 稳定 + 幂等 |
+| **v3** | `tool.call.toolview` key `write/edit` | `priority: -1` | ⚠️ 稳定但出错的调用也显示徽章 |
+| **v4 (final)** | `tool.call.toolview` key `write/edit` | `priority: -1` | ✅ 稳定 + 幂等 + 出错抑制 |
 
-### 5.2 最终方案（动态插件，dsao-1/pkg-3）
+### 5.2 最终方案
 
 ```
 注册点: tool.call.toolview → key 'write' / 'edit', priority -1
@@ -224,12 +225,83 @@ FileMutationRow
       挂 MutationObserver 检测文件链接出现后插入徽章
 
 MutationObserver 收敛保证（核心）：
-  1. ensureBadge 幂等：fileLink.nextElementSibling 已是徽章 → 0 DOM 改动早退
+  1. ensureBadge 幂等：fileLink.nextElementSibling 已是徽章
+     且 title 签名一致 → 0 DOM 改动早退
   2. 不观察 characterData（只观察 childList + subtree）
-  3. 只有徽章缺失时才有一次删除+插入操作，之后收敛到稳态
+  3. 只有徽章缺失或数值变化时才有一次删除+插入操作，之后收敛到稳态
 ```
 
-### 5.3 徽章样式
+### 5.3 行数来源与出错抑制
+
+行数取自 block 的 diff 渲染意图，必须与官方 `diffCardModel` 完全一致：
+
+```js
+// 官方 dsh-client-ui-tool/lib/client.js
+function diffCardModel(block) {
+  if (!("kind" in block)) {                                    // 运行中
+    const call = block.callView?.card === "diff" ? block.callView : null
+    ...
+  }
+  const result = block.resultView?.card === "diff" ? block.resultView : null   // 已结算：只读 resultView
+  ...
+}
+```
+
+关键契约（官方 `file-mutation-row.d.ts` 明确写出）：
+
+> An errored mutation has no diff card, so ToolRow surfaces the model-facing
+> error text through its Output section and its first line in the collapsed
+> summary instead.
+
+因此已结算的调用**不能**回退到 `callView`——`callView` 描述的是"打算改什么"，编辑失败时它依然存在，把它当结果会渲染出不存在的变更。
+
+```js
+function diffView(block) {
+  if ('kind' in block) {
+    if (block.isError) return null      // 出错 → 无 diff card
+    return block.resultView || null     // 不回退 callView
+  }
+  return block.callView || null         // 运行中：callView 是唯一来源
+}
+```
+
+### 5.4 陷阱：运行中→出错 的残留徽章
+
+出错的行在 DOM 上是**另一种结构**。官方 `ToolRow` 只在 `failureLine === null` 时渲染 `button.fileLink`：
+
+```js
+// 官方 ToolRow
+const failureLine = state === "error" ? errorSummary ?? null : null;
+const fileLink = filePath !== void 0 && onOpenFile !== void 0 && failureLine === null;
+// fileLink ? <button className={fileLink}> : <span className={summary errorSummary}>
+```
+
+流式期间调用尚未出错，`fileLink` 存在，徽章被注入。调用转为出错后 React 把 `button.fileLink` 换成 `span.errorSummary`——但徽章是 React 不认识的额外节点，**不会被这次 re-render 移除**。
+
+如果 `ensureBadge` 先查 fileLink、查不到就早退，残留徽章就再没有人清除。这正是"实时流里出错的 edit 仍有 +/-，切走再回来就没有了"的原因：切换会话触发整棵子树重新挂载，新 DOM 从一开始就没有徽章。
+
+修正：**清理必须先于 fileLink 查找**。
+
+```js
+function ensureBadge(container, block) {
+  if (!container || !container.querySelectorAll) return
+  var stats = block ? diffStats(block) : null
+  var link = container.querySelector('[class*="fileLink"]')
+  var olds = container.querySelectorAll('[data-dsao-diff-badge]')
+
+  if (!stats || !link || !link.parentNode) {   // 无 diff 或已无 fileLink → 清残留
+    for (var k = 0; k < olds.length; k++) {
+      if (olds[k].parentNode) olds[k].parentNode.removeChild(olds[k])
+    }
+    return
+  }
+  ...
+}
+```
+
+一般规律：**往官方渲染的 DOM 注入额外节点时，注入路径与清理路径必须独立**。清理不能依赖注入时的锚点仍然存在，因为官方组件可以在状态转换时把那个锚点整个换掉。
+
+### 5.5 徽章样式
 
 ```css
 [data-dsao-diff-badge] {
@@ -428,11 +500,37 @@ cordis_run({ pluginId, packageId, mode: 'update' })
 ✅ 幂等回调：检查 DOM 是否已满足 → 零改动早退 → 收敛到稳态
 ```
 
-### 9.5 动态插件重启丢失
+### 9.5 注入的 DOM 节点在状态转换后残留
+
+```
+❌ 清理逻辑依赖注入时的锚点（如 fileLink）仍然存在
+   → 官方组件在 running → error 转换时把锚点换成另一个元素
+   → 早退，残留节点永远清不掉（切换会话重新挂载后才"自愈"）
+✅ 清理路径独立于注入路径：先清理，再决定是否注入
+```
+
+### 9.6 已结算调用回退读 callView
+
+```
+❌ resultView || callView
+   → 出错的调用 resultView 为 null，但 callView 仍描述意图中的操作
+   → 渲染出实际并未发生的变更
+✅ 已结算只读 resultView，并先查 isError（与官方 diffCardModel 一致）
+```
+
+### 9.7 动态插件重启丢失
 
 ```
 ❌ 依赖动态插件持久化功能
 ✅ 功能验证通过后立即固化为静态插件（lib/client.js）
+```
+
+### 9.8 测试另写一份实现
+
+```
+❌ 测试里复制一遍 diffStats/ensureBadge 逻辑
+   → 产物改了测试还绿
+✅ 从 lib/client.js 中提取真实模块工厂求值（test/load-module.mjs）
 ```
 
 ---

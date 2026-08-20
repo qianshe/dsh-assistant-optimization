@@ -155,20 +155,26 @@ function badgeSignature(stats) {
 }
 
 /**
- * 幂等徽章注入。三种情况：
- * 1. 无 diff（出错、或未产生变更）→ 清除可能残留的旧徽章后返回
+ * 幂等徽章注入。
+ *
+ * 清理必须先于 fileLink 查找：官方 ToolRow 只在 `failureLine === null` 时渲染
+ * fileLink 按钮，出错的行会把它换成 errorSummary span。流式期间注入的徽章是
+ * React 不认识的额外节点，调用转为出错后仍留在 DOM 里，若此时因找不到
+ * fileLink 提前返回，残留徽章就再没有人清除。
+ *
+ * 三种情况：
+ * 1. 无 diff（出错/无变更），或 fileLink 已不存在 → 清除残留徽章后返回
  * 2. 徽章已在正确位置且内容一致 → 零 DOM 改动直接返回（避免 observer 自触发）
  * 3. 其余 → 重建徽章
  */
 function ensureBadge(container, block) {
-  if (!container || !block) return
-  var link = container.querySelector('[class*="fileLink"]')
-  if (!link || !link.parentNode) return
+  if (!container || !container.querySelectorAll) return
 
-  var stats = diffStats(block)
+  var stats = block ? diffStats(block) : null
+  var link = container.querySelector('[class*="fileLink"]')
   var olds = container.querySelectorAll('[data-dsao-diff-badge]')
 
-  if (!stats) {
+  if (!stats || !link || !link.parentNode) {
     for (var k = 0; k < olds.length; k++) {
       if (olds[k].parentNode) olds[k].parentNode.removeChild(olds[k])
     }

@@ -120,7 +120,10 @@ dsh plugin --profile web remove dsh-assistant-optimization
 │       ├── mermaid.js     # SVG 渲染 + 缩放拖拽
 │       └── settings.js    # 设置行组件
 ├── test/
-│   └── diff-stats.test.mjs
+│   ├── load-module.mjs         # 单独取出并求值一个产物模块
+│   ├── dom-stub.mjs            # 最小 DOM + ToolRow 夹具
+│   ├── diff-stats.test.mjs
+│   └── ensure-badge.test.mjs
 └── docs/
     ├── design.md
     └── technical-reference.md   # DSH slot 与工具调用渲染技术参考
@@ -131,9 +134,12 @@ dsh plugin --profile web remove dsh-assistant-optimization
 ## 开发
 
 ```bash
-node test/diff-stats.test.mjs   # diff 计数与出错抑制
-node --check lib/client.js      # 产物语法检查
+node test/diff-stats.test.mjs    # diff 计数与出错抑制
+node test/ensure-badge.test.mjs  # DOM 收敛，含 运行中 → 出错 的转换
+node --check lib/client.js       # 产物语法检查
 ```
+
+两个测试都从 `lib/client.js` 中取出真实的 `dsao/tool-diff` 模块求值，测的是实际发布的产物，而不是另写一份实现。
 
 ## 要求
 

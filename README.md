@@ -120,7 +120,10 @@ Line counts come from the block's diff render intent, following the official `di
 │       ├── mermaid.js     # SVG rendering + pan/zoom
 │       └── settings.js    # settings row component
 ├── test/
-│   └── diff-stats.test.mjs
+│   ├── load-module.mjs         # evaluate one bundle module in isolation
+│   ├── dom-stub.mjs            # minimal DOM + ToolRow fixture
+│   ├── diff-stats.test.mjs
+│   └── ensure-badge.test.mjs
 └── docs/
     ├── design.md
     └── technical-reference.md   # DSH slot & tool-call rendering reference
@@ -131,9 +134,12 @@ Line counts come from the block's diff render intent, following the official `di
 ## Development
 
 ```bash
-node test/diff-stats.test.mjs   # diff counting + error suppression
-node --check lib/client.js      # bundle syntax
+node test/diff-stats.test.mjs    # diff counting + error suppression
+node test/ensure-badge.test.mjs  # DOM convergence, incl. running → errored
+node --check lib/client.js       # bundle syntax
 ```
+
+Both suites load the real `dsao/tool-diff` module out of `lib/client.js`, so they test the shipped bundle rather than a re-implementation.
 
 ## Requirements
 
