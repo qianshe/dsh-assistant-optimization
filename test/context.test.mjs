@@ -225,7 +225,7 @@ const SUB_CONTENT = [
 
 // 11. readContext degrades safely and never throws on a foreign shape.
 {
-  const empty = { project: '', cwd: '', instructions: '', summary: '', history: '' }
+  const empty = { project: '', cwd: '', instructions: '', summary: '', history: '', replies: '' }
   assert.deepEqual(context.readContext(null, null, null), empty, 'a null session is safe')
   assert.deepEqual(context.readContext({ nodes: 'nope' }, null, null), empty, 'a non-array nodes field is safe')
   const out = context.readContext({ sessionId: 's1', nodes: [contextNode([{ path: 'AGENTS.md', content: PROJECT_CONTENT }])] }, null, null)
@@ -262,4 +262,112 @@ const SUB_CONTENT = [
   assert.equal(context.docRank('docs/NOTES.md'), -1, 'an unrelated doc is rejected')
 }
 
-console.log('context: 14 scenarios passed')
+// 15. stripLiteralBlocks removes where transient literals live, and keeps the
+//     identities. Fenced blocks were the actual source of the earlier leak: a
+//     rewrite pasted byte counts out of an illustrative example.
+{
+  const text = [
+    'Prose before.',
+    '```js',
+    'const REF_CAPS = { history: 1200 }',
+    '```',
+    '| col | col |',
+    '|---|---|',
+    '| 340 | 52 |',
+    '---',
+    'Prose with `ensureBadge` and `lib/client.js`.',
+  ].join('\n')
+  const out = context.stripLiteralBlocks(text)
+  assert.ok(!out.includes('REF_CAPS'), 'fenced code is removed')
+  assert.ok(!out.includes('340'), 'table rows are removed')
+  assert.ok(out.includes('Prose before.'), 'prose survives')
+  assert.ok(out.includes('ensureBadge'), 'an inline identity survives')
+  assert.ok(out.includes('lib/client.js'), 'an inline path survives')
+  assert.ok(!out.includes('`'), 'the backticks themselves are dropped')
+}
+
+// 16. hasQuantity separates a measurement from an identity: a digit glued to a
+//     letter or following a hyphen is part of a name, not a value.
+{
+  for (const identity of ['pkg-7 已运行', 'deepseek-v4-flash', 'AGENTS.md 读到了', '改成蓝色', 'no digits here']) {
+    assert.equal(context.hasQuantity(identity), false, `${identity} must read as an identity`)
+  }
+  for (const quantity of ['15 条 → 12 条', '+2/-1', '64KB 上限', 'priority: -1', 'about 900 chars']) {
+    assert.equal(context.hasQuantity(quantity), true, `${quantity} must read as a measurement`)
+  }
+}
+
+// 17. readReplies takes one conclusion per turn: the highest step, quantity-free
+//     sentences only, interrupted prefixes skipped.
+{
+  const reply = [
+    '按钮已恢复，注入层修好了。',
+    '',
+    '| 项 | 内容 |',
+    '|---|---|',
+    '| 删 | 独立规则 |',
+    '',
+    '```js',
+    'project 52 / instructions 340',
+    '```',
+    '',
+    '根因是 `readHistory` 把 agent 回复也注入了。',
+    '15 条精简到 12 条。',
+  ].join('\n')
+
+  const nodes = [
+    { kind: 'user', content: [{ type: 'text', text: '按钮不见了' }] },
+    { kind: 'assistant', turn: 1, step: 0, blocks: [{ kind: 'text', text: '先看一下 slot 注册。' }] },
+    { kind: 'assistant', turn: 1, step: 3, blocks: [{ kind: 'reasoning', text: '内部思考' }, { kind: 'text', text: reply }] },
+    { kind: 'user', content: [{ type: 'text', text: '继续' }] },
+    { kind: 'assistant', turn: 2, step: 1, interrupted: true, blocks: [{ kind: 'text', text: '被打断的前缀' }] },
+  ]
+
+  const out = context.readReplies(nodes)
+  assert.ok(out.includes('按钮已恢复'), 'the conclusion is carried')
+  assert.ok(out.includes('readHistory'), 'an identity inside the conclusion survives')
+  assert.ok(!out.includes('先看一下'), 'an earlier step is not the conclusion')
+  assert.ok(!out.includes('project 52'), 'fenced values never reach the reference')
+  assert.ok(!out.includes('15 条'), 'a sentence carrying a quantity is dropped whole')
+  assert.ok(!out.includes('内部思考'), 'reasoning is skipped')
+  assert.ok(!out.includes('被打断'), 'an interrupted prefix is not a conclusion')
+  assert.equal(out.split('\n').length, 1, 'one line per turn with a usable conclusion')
+
+  // Asks and replies are a pair, each with its own budget.
+  assert.equal(context.readHistory(nodes), '按钮不见了\n继续', 'asks are unchanged')
+  const ctxOut = context.readContext({ sessionId: 's1', nodes }, null, null)
+  assert.ok(ctxOut.replies.includes('按钮已恢复'), 'readContext carries replies')
+  assert.ok(ctxOut.history.includes('继续'), 'readContext still carries asks')
+}
+
+// 18. A turn whose conclusion is entirely quantities contributes nothing rather
+//     than a stump, and a node without turn/step is still considered.
+{
+  const allNumbers = [
+    { kind: 'assistant', turn: 1, step: 0, blocks: [{ kind: 'text', text: '12 条规则，900 字符。' }] },
+  ]
+  assert.equal(context.readReplies(allNumbers), '', 'a quantity-only conclusion is dropped')
+
+  const noTurn = [
+    { kind: 'assistant', seq: 7, blocks: [{ kind: 'text', text: '改完了。' }] },
+  ]
+  assert.ok(context.readReplies(noTurn).includes('改完了'), 'a node without a turn number still counts')
+
+  assert.equal(context.readReplies([]), '', 'no assistant nodes yield nothing')
+}
+
+// 19. The reply budget caps turns and per-line length.
+{
+  const nodes = []
+  for (let i = 1; i <= 10; i++) {
+    nodes.push({ kind: 'assistant', turn: i, step: 0, blocks: [{ kind: 'text', text: `完成了第 X 项工作，一切正常。` }] })
+  }
+  const lines = context.readReplies(nodes).split('\n')
+  assert.ok(lines.length <= context.LIMITS.replyNodes, 'the reply node cap applies')
+
+  const long = 'a'.repeat(400) + '。'
+  const one = context.readReplies([{ kind: 'assistant', turn: 1, step: 0, blocks: [{ kind: 'text', text: long }] }])
+  assert.ok(one.length <= context.LIMITS.replyItem + 1, 'the per-reply cap applies')
+}
+
+console.log('context: 19 scenarios passed')

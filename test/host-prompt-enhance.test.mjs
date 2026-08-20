@@ -192,13 +192,22 @@ const defaultModel = { currentSelection: () => selection }
       instructions: 'AGENTS.md: Architecture; Verification',
       summary: 'earlier we moved the badge to the toolview slot',
       history: 'make it dimmer',
+      replies: 'the separator now follows the file link colour',
     },
   })
   assert.equal(res.status, 200, 'a request carrying context must succeed')
 
   const sent = options.messages[0].content[0].text
   assert.ok(sent.includes('<private_reference>'), 'the reference is framed')
-  const order = ['Project: DSAO', 'Project instruction outline', 'Earlier session summary', 'Recent user asks', '<user_draft>']
+  // Asks then results: what was requested, then what was finished.
+  const order = [
+    'Project: DSAO',
+    'Project instruction outline',
+    'Earlier session summary',
+    'Recent user asks',
+    'Recent agent results',
+    '<user_draft>',
+  ]
   let at = -1
   for (const marker of order) {
     const next = sent.indexOf(marker)
@@ -224,26 +233,40 @@ const defaultModel = { currentSelection: () => selection }
 {
   const route = mount({ llm: llmStub(), agentDefaultModel: defaultModel })
   const res = await call(route, {
-    body: { text: 'hi', project: 'P', instructions: 'AGENTS.md: A; B', summary: 'sum', history: 'User: x' },
+    body: { text: 'hi', project: 'P', instructions: 'AGENTS.md: A; B', summary: 'sum', history: 'ask', replies: 'done' },
   })
   assert.equal(res.body.refBytes.project, 1, 'project size is reported')
   assert.equal(res.body.refBytes.instructions, 'AGENTS.md: A; B'.length, 'instruction size is reported')
   assert.equal(res.body.refBytes.summary, 3, 'summary size is reported')
+  assert.equal(res.body.refBytes.history, 3, 'ask size is reported')
+  assert.equal(res.body.refBytes.replies, 4, 'result size is reported separately from asks')
   assert.equal(res.body.refBytes.instructionSource, 'session', 'a snapshot-supplied outline reports its source')
 }
 
 // 15. With no instructions from the snapshot, the Host reads a file itself in
 //     preference order: AGENTS.md, then CLAUDE.md, then README.md.
 {
-  /** An fs stub exposing only the files it is given. */
+  /**
+   * An fs stub exposing only the files it is given. `stat` returns the real
+   * FsInfo shape: `type` is what lets a consumer reject a directory before
+   * reading, exactly as DSH's own probeScopeInstruction does.
+   */
   function fsStub(files) {
     return {
       resolve: async (name, opts) => {
         if (files[name] === undefined) throw new Error('ENOENT');
         return { key: `${opts.cwd}/${name}`, name }
       },
-      stat: async (target) => ({ size: Buffer.byteLength(files[target.name], 'utf8') }),
-      readText: async (target) => files[target.name],
+      stat: async (target) => {
+        const entry = files[target.name]
+        if (typeof entry !== 'string') return { version: 'v1', type: entry.type }
+        return { version: 'v1', type: 'file', size: Buffer.byteLength(entry, 'utf8') }
+      },
+      readText: async (target) => {
+        const entry = files[target.name]
+        if (typeof entry !== 'string') throw new Error('EISDIR')
+        return entry
+      },
     }
   }
 
@@ -287,6 +310,17 @@ const defaultModel = { currentSelection: () => selection }
     assert.equal(res.status, 200, 'a project with no docs still enhances')
     assert.equal(res.body.refBytes.instructionSource, 'none', 'the absence is reported')
     assert.equal(res.body.refBytes.instructions, 0, 'no outline is fabricated')
+  }
+
+  // A directory named AGENTS.md is rejected by FsInfo.type before readText,
+  // so the chain continues to the next candidate instead of throwing.
+  {
+    const route = mount({
+      llm: llmStub(), agentDefaultModel: defaultModel,
+      fs: fsStub({ 'AGENTS.md': { type: 'directory' }, 'CLAUDE.md': doc }),
+    })
+    const res = await call(route, { body: { text: 'hi', cwd: 'D:/p' } })
+    assert.equal(res.body.refBytes.instructionSource, 'CLAUDE.md', 'a directory candidate is skipped by type')
   }
 }
 
@@ -351,10 +385,11 @@ const defaultModel = { currentSelection: () => selection }
   const rules = system.split('\n\n')
   assert.ok(rules.length <= 12, `the prompt must stay at most 12 rules, got ${rules.length}`)
 
-  // The reference section names user asks, not the whole conversation.
+  // The reference parts are labelled by role, so asks and results stay distinct
+  // rather than merging back into one undifferentiated transcript.
   const sent = options.messages[0].content[0].text
-  assert.match(sent, /Recent user asks:/, 'the reference labels the part as user asks')
-  assert.doesNotMatch(sent, /Recent conversation:/, 'agent replies are not part of the reference')
+  assert.match(sent, /Recent user asks:/, 'asks are labelled')
+  assert.doesNotMatch(sent, /Recent conversation:/, 'the reference is never a raw transcript')
 }
 
 console.log('host-prompt-enhance: 18 scenarios passed')

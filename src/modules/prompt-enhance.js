@@ -69,7 +69,8 @@ function refSummary(refBytes) {
   return '上次上下文：project ' + num(refBytes.project) +
     ' / instructions ' + num(refBytes.instructions) + ' (' + src + ')' +
     ' / summary ' + num(refBytes.summary) +
-    ' / history ' + num(refBytes.history)
+    ' / asks ' + num(refBytes.history) +
+    ' / results ' + num(refBytes.replies)
 }
 
 /** POST the draft plus its private reference; the Host runs one non-session call. */
@@ -105,7 +106,7 @@ function createPromptEnhance(React, contextMod) {
     var draftRef = React.useRef('')
     var actionsRef = React.useRef(null)
     var lastRefRef = React.useRef('')
-    var contextRef = React.useRef({ project: '', cwd: '', instructions: '', summary: '', history: '' })
+    var contextRef = React.useRef({ project: '', cwd: '', instructions: '', summary: '', history: '', replies: '' })
 
     var input = props.input || {}
     var draft = typeof input.draft === 'string' ? input.draft : ''
@@ -255,6 +256,7 @@ function createPromptEnhance(React, contextMod) {
           instructions: ref.instructions,
           summary: ref.summary,
           history: ref.history,
+          replies: ref.replies,
         }, controller.signal).then(function (reply) {
           if (reply.text.trim() !== '') actions.setDraft(reply.text)
           lastRefRef.current = refSummary(reply.refBytes)
