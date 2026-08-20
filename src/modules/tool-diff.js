@@ -36,12 +36,24 @@ function countLines(text) {
   return normalized.split('\n').length
 }
 
+/**
+ * Resolve the diff render intent for a block, matching the official
+ * diffCardModel: a settled call reads resultView only (never falls back to
+ * callView), because an errored mutation carries no diff card even though its
+ * call view still describes the intended edit.
+ */
+function diffView(block) {
+  if (!block) return null
+  if ('kind' in block) {
+    if (block.isError) return null
+    return block.resultView || null
+  }
+  return block.callView || null
+}
+
 /** Count added/deleted lines from a file-mutation tool life-cycle block. */
 function diffStats(block) {
-  if (!block) return null
-  var view = 'kind' in block
-    ? (block.resultView || block.callView || null)
-    : (block.callView || null)
+  var view = diffView(block)
   if (!view || view.card !== 'diff' || !Array.isArray(view.diffs)) return null
   var added = 0
   var deleted = 0
@@ -57,9 +69,7 @@ function diffStats(block) {
 
 function diffPath(block) {
   if (!block) return null
-  var view = 'kind' in block
-    ? (block.resultView || block.callView || null)
-    : (block.callView || null)
+  var view = diffView(block)
   if (view && view.card === 'diff' && Array.isArray(view.diffs) && view.diffs.length && typeof view.diffs[0].path === 'string') {
     return view.diffs[0].path
   }
@@ -136,18 +146,41 @@ function findOfficialView(slots, toolName) {
   return null
 }
 
-/** 幂等徽章注入：徽章已正确位于 fileLink 后则直接返回，零 DOM 改动 */
+/** 徽章的稳定标识：内容相同则无需触碰 DOM */
+function badgeSignature(stats) {
+  var parts = []
+  if (stats.added > 0) parts.push('+' + stats.added)
+  if (stats.deleted > 0) parts.push('-' + stats.deleted)
+  return parts.join(' / ')
+}
+
+/**
+ * 幂等徽章注入。三种情况：
+ * 1. 无 diff（出错、或未产生变更）→ 清除可能残留的旧徽章后返回
+ * 2. 徽章已在正确位置且内容一致 → 零 DOM 改动直接返回（避免 observer 自触发）
+ * 3. 其余 → 重建徽章
+ */
 function ensureBadge(container, block) {
   if (!container || !block) return
   var link = container.querySelector('[class*="fileLink"]')
   if (!link || !link.parentNode) return
-  var next = link.nextElementSibling
-  if (next && next.getAttribute && next.getAttribute('data-dsao-diff-badge') === '') {
-    return // 已正确放置，避免自触发
-  }
+
   var stats = diffStats(block)
-  if (!stats) return
   var olds = container.querySelectorAll('[data-dsao-diff-badge]')
+
+  if (!stats) {
+    for (var k = 0; k < olds.length; k++) {
+      if (olds[k].parentNode) olds[k].parentNode.removeChild(olds[k])
+    }
+    return
+  }
+
+  var next = link.nextElementSibling
+  if (next && next.getAttribute && next.getAttribute('data-dsao-diff-badge') === '' &&
+      next.title === badgeSignature(stats) && olds.length === 1) {
+    return // 已正确放置且内容未变
+  }
+
   for (var i = 0; i < olds.length; i++) {
     var o = olds[i]
     if (o.parentNode) o.parentNode.removeChild(o)
