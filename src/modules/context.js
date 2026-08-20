@@ -8,12 +8,17 @@
 //   1. Workspace identity   title + path
 //   2. Project instructions structure signals from project-scoped AGENTS.md
 //   3. Session summary      DSH's own compaction summary, when one exists
-//   4. Recent conversation  the tail of user/agent text
+//   4. Recent user asks     the tail of the user's own turns
 //
-// The user-global instruction file is deliberately excluded: it describes how
-// the agent should behave in general, not what this project is, so it would
-// only crowd out project facts. DSH marks it by display path — see
-// scopeForDisplayPath in dsh-agent-instructions.
+// Two exclusions, both to keep the reference free of anything a rewrite could
+// wrongly restate as fact:
+//
+//   - The user-global instruction file describes how the agent should behave in
+//     general, not what this project is. DSH marks it by display path — see
+//     scopeForDisplayPath in dsh-agent-instructions.
+//   - Agent replies carry arbitrary transient material (counts, code, paths,
+//     illustrative values). A demonstrative in the draft points at what the USER
+//     was discussing, so their own turns are what resolves it.
 
 // Display paths DSH uses for the single user-global instruction file.
 var GLOBAL_PATHS = ['~/.dsh/AGENTS.md', '$DSH_HOME/AGENTS.md']
@@ -30,12 +35,12 @@ var BOILERPLATE_RE = /^(?:These instructions apply to work under|The following w
 
 var LIMITS = {
   instructionsTotal: 900,
-  perFile: 420,
   signalsPerFile: 12,
   summary: 700,
-  historyTotal: 1200,
-  historyItem: 260,
-  historyNodes: 6,
+  // User asks only, so the same budget buys roughly twice the turns.
+  historyTotal: 900,
+  historyItem: 220,
+  historyNodes: 5,
 }
 
 /** Collapse whitespace, drop blanks and duplicate lines, then cap. */
@@ -234,23 +239,29 @@ function readSummary(nodes) {
   return ''
 }
 
-/** Tail of the conversation: newest nodes win the budget, order restored after. */
+/**
+ * Tail of the user's own asks — agent replies are deliberately excluded.
+ *
+ * A demonstrative in the draft ("那个预算") points at what the USER was just
+ * talking about, so their own turns are what resolves it. Agent replies, by
+ * contrast, carry arbitrary transient material — byte counts, code snippets,
+ * paths, illustrative values — and a rewrite that pastes any of that states
+ * something the draft never claimed. Removing them removes the source of that
+ * failure instead of asking the model not to use what it was given.
+ *
+ * Newest nodes win the budget; chronological order is restored after.
+ */
 function readHistory(nodes) {
   var picked = []
   var budget = LIMITS.historyTotal
   for (var i = nodes.length - 1; i >= 0 && picked.length < LIMITS.historyNodes && budget > 0; i--) {
     var node = nodes[i]
     if (node === null || typeof node !== 'object') continue
-    var role = ''
-    var text = ''
-    if (node.kind === 'user') { role = 'User'; text = blockText(node.content) }
-    else if (node.kind === 'assistant') { role = 'Agent'; text = blockText(node.blocks) }
-    else continue
-    var line = compact(text, LIMITS.historyItem)
+    if (node.kind !== 'user') continue
+    var line = compact(blockText(node.content), LIMITS.historyItem)
     if (line === '') continue
-    var entry = role + ': ' + line
-    budget -= entry.length
-    picked.push(entry)
+    budget -= line.length
+    picked.push(line)
   }
   picked.reverse()
   return picked.join('\n')

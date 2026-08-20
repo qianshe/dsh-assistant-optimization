@@ -191,14 +191,14 @@ const defaultModel = { currentSelection: () => selection }
       project: 'DSAO (D:/p/dsao)',
       instructions: 'AGENTS.md: Architecture; Verification',
       summary: 'earlier we moved the badge to the toolview slot',
-      history: 'User: make it dimmer\nAgent: done',
+      history: 'make it dimmer',
     },
   })
   assert.equal(res.status, 200, 'a request carrying context must succeed')
 
   const sent = options.messages[0].content[0].text
   assert.ok(sent.includes('<private_reference>'), 'the reference is framed')
-  const order = ['Project: DSAO', 'Project instruction outline', 'Earlier session summary', 'Recent conversation', '<user_draft>']
+  const order = ['Project: DSAO', 'Project instruction outline', 'Earlier session summary', 'Recent user asks', '<user_draft>']
   let at = -1
   for (const marker of order) {
     const next = sent.indexOf(marker)
@@ -314,26 +314,47 @@ const defaultModel = { currentSelection: () => selection }
   assert.equal(res.body.refBytes.instructionSource, 'none', 'the absence is reported')
 }
 
-// 18. The system prompt separates resolving a referent's identity from
-//     importing its data. A rewrite once "resolved" a reference by pasting the
-//     byte counts it found in the private reference — stale example values,
-//     stated as fact — so the contract must forbid carrying values across.
+// 18. The prompt stays close to the tiller baseline and does not accumulate a
+//     rule per observed failure. Two failures shaped it: pure copy-editing that
+//     deleted the demonstrative needing resolution, and a rewrite that pasted
+//     values found in the reference. The first is a rule; the second is fixed by
+//     keeping agent replies out of the reference (see readHistory), so the prompt
+//     must NOT carry a dedicated ban for it.
 {
   let options
   const route = mount({ llm: llmStub({ capture: (o) => { options = o } }), agentDefaultModel: defaultModel })
-  await call(route, { body: { text: 'hi', history: 'User: project 52 / instructions 340' } })
+  await call(route, { body: { text: 'hi', history: 'earlier ask' } })
   const system = options.system
 
-  assert.match(system, /IDENTITY, never import its DATA/, 'the identity/data split must be stated')
-  assert.match(system, /FORBIDDEN in the output/, 'reference-only values must be forbidden outright')
-  assert.match(system, /ask the agent to look it up instead of stating one/, 'the escape hatch must be a lookup request')
-  assert.match(system, /stale or illustrative values/, 'the reference may carry values that are no longer true')
-  assert.match(system, /naming is the limit/, 'naming a file must not license copying its contents')
+  // The tiller baseline rules.
+  for (const marker of [
+    /source of truth/,
+    /Razor rule/,
+    /Internal workflow, applied silently/,
+    /Preserve the task mode/,
+    /Do not pretend you inspected the repository/,
+    /Use sections sparingly/,
+    /Output ONLY the rewritten prompt/,
+  ]) {
+    assert.match(system, marker, `the tiller baseline rule ${marker} must be present`)
+  }
 
-  // The two rules that previously conflicted must both still be present: one
-  // demands resolution, the other forbids fabrication.
-  assert.match(system, /Resolve ambiguity, do not delete it/, 'resolution is still required')
-  assert.match(system, /Never copy, summarize, quote, or restate/, 'the non-output contract is still stated')
+  // Our one addition, with the no-fabrication clause folded into it rather than
+  // standing as its own rule.
+  assert.match(system, /Resolve ambiguity, do not delete it/, 'resolution is required')
+  assert.match(system, /Name things, never invent their values/, 'no-fabrication rides the same rule')
+  assert.match(system, /ask the agent to look it up/, 'the escape hatch is a lookup request')
+  assert.doesNotMatch(system, /FORBIDDEN in the output/, 'the standalone value ban is gone')
+  assert.doesNotMatch(system, /stale or illustrative values/, 'the reference no longer needs that warning')
+
+  // Budget guard: the prompt must stay compact enough to keep every rule salient.
+  const rules = system.split('\n\n')
+  assert.ok(rules.length <= 12, `the prompt must stay at most 12 rules, got ${rules.length}`)
+
+  // The reference section names user asks, not the whole conversation.
+  const sent = options.messages[0].content[0].text
+  assert.match(sent, /Recent user asks:/, 'the reference labels the part as user asks')
+  assert.doesNotMatch(sent, /Recent conversation:/, 'agent replies are not part of the reference')
 }
 
 console.log('host-prompt-enhance: 18 scenarios passed')

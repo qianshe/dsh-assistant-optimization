@@ -171,7 +171,9 @@ const SUB_CONTENT = [
   assert.equal(context.readSummary([]), '', 'no compaction yields nothing')
 }
 
-// 8. History reads both node shapes, skips reasoning, and keeps chronology.
+// 8. History carries the user's own asks only. Agent replies are the source of
+//    the values a rewrite would wrongly restate as fact, so they never enter the
+//    reference — the pollution is removed rather than policed by a rule.
 {
   const nodes = [
     { kind: 'user', content: [{ type: 'text', text: 'first ask' }] },
@@ -179,26 +181,28 @@ const SUB_CONTENT = [
       kind: 'assistant',
       blocks: [
         { kind: 'reasoning', text: 'internal thought' },
-        { kind: 'text', text: 'first answer' },
+        { kind: 'text', text: 'project 52 / instructions 340 / summary 0' },
       ],
     },
     { kind: 'tool-result', content: [{ type: 'text', text: 'tool noise' }] },
     { kind: 'user', content: [{ type: 'text', text: 'second ask' }] },
   ]
   const out = context.readHistory(nodes)
-  assert.deepEqual(out.split('\n'), ['User: first ask', 'Agent: first answer', 'User: second ask'], 'chronological user/agent text only')
+  assert.deepEqual(out.split('\n'), ['first ask', 'second ask'], 'chronological user asks, unlabelled')
+  assert.ok(!out.includes('project 52'), 'agent-supplied values must not reach the reference')
   assert.ok(!out.includes('internal thought'), 'reasoning must be skipped')
   assert.ok(!out.includes('tool noise'), 'tool results must be skipped')
+  assert.ok(!out.includes('Agent'), 'no agent turn is represented at all')
 }
 
-// 9. History keeps the newest nodes when the node budget is exceeded.
+// 9. History keeps the newest asks when the node budget is exceeded.
 {
   const nodes = []
   for (let i = 1; i <= 10; i++) nodes.push({ kind: 'user', content: [{ type: 'text', text: `ask ${i}` }] })
   const lines = context.readHistory(nodes).split('\n')
   assert.equal(lines.length, context.LIMITS.historyNodes, 'the node cap applies')
-  assert.equal(lines[lines.length - 1], 'User: ask 10', 'the newest node is kept')
-  assert.equal(lines[0], 'User: ask 5', 'the oldest kept node is the newest six')
+  assert.equal(lines[lines.length - 1], 'ask 10', 'the newest ask is kept')
+  assert.equal(lines[0], `ask ${10 - context.LIMITS.historyNodes + 1}`, 'the kept window is the newest N')
 }
 
 // 10. Workspace identity resolves through cwd, with a basename fallback.
