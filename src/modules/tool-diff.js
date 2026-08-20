@@ -1,5 +1,5 @@
 // tool-diff.js — add colored diff line counts to file-mutation tool rows.
-// Exports: diffStats, annotateToolDiffs
+// Exports: diffStats, createBadge, diffPath, ensureBadge, findOfficialView
 // Requires: nothing (pure data + DOM helpers)
 
 function toolName(block) {
@@ -100,7 +100,12 @@ function createBadge(stats) {
     add.style.color = 'var(--dsw-alias-state-success-primary, #16a34a)'
     badge.appendChild(add)
   }
-  if (stats.added > 0 && stats.deleted > 0) badge.appendChild(document.createTextNode('/'))
+  if (stats.added > 0 && stats.deleted > 0) {
+    var sep = document.createElement('span')
+    sep.textContent = '/'
+    sep.style.cssText = 'color:var(--dsw-alias-text-tertiary,#999);opacity:0.4'
+    badge.appendChild(sep)
+  }
   if (stats.deleted > 0) {
     var del = document.createElement('span')
     del.textContent = '-' + stats.deleted
@@ -113,6 +118,46 @@ function createBadge(stats) {
   badge.title = titleParts.join(' / ')
   return badge
 }
+
+// ── 新方案：tool.call.toolview 层注册支持 ──────────────────────────────────
+
+/** 从 slots 查找 tool.call.toolview 官方 priority 0 组件 */
+function findOfficialView(slots, toolName) {
+  try {
+    var entries = slots.entries('tool.call.toolview')
+    if (!entries) return null
+    for (var i = 0; i < entries.length; i++) {
+      var e = entries[i]
+      if (e.options.key === toolName && (e.options.priority || 0) === 0) {
+        return e.component
+      }
+    }
+  } catch (err) {}
+  return null
+}
+
+/** 幂等徽章注入：徽章已正确位于 fileLink 后则直接返回，零 DOM 改动 */
+function ensureBadge(container, block) {
+  if (!container || !block) return
+  var link = container.querySelector('[class*="fileLink"]')
+  if (!link || !link.parentNode) return
+  var next = link.nextElementSibling
+  if (next && next.getAttribute && next.getAttribute('data-dsao-diff-badge') === '') {
+    return // 已正确放置，避免自触发
+  }
+  var stats = diffStats(block)
+  if (!stats) return
+  var olds = container.querySelectorAll('[data-dsao-diff-badge]')
+  for (var i = 0; i < olds.length; i++) {
+    var o = olds[i]
+    if (o.parentNode) o.parentNode.removeChild(o)
+  }
+  link.style.flex = '0 1 auto'
+  var badge = createBadge(stats)
+  link.parentNode.insertBefore(badge, link.nextSibling)
+}
+
+// ── 旧方案（保留兼容，但不再被主入口使用）─────────────────────────────────
 
 /** Annotate every file-mutation row already rendered by the official tool tree. */
 function annotateToolDiffs(rootEl, root) {
@@ -139,8 +184,6 @@ function annotateToolDiffs(rootEl, root) {
     var link = row.querySelector('[class*="fileLink"]')
     var target = link || findPathTarget(row, path) || row.querySelector('[class*="summary"]')
     if (!target || !target.parentNode) continue
-    // Keep the path sized to its text so the badge sits directly after it
-    // instead of being pushed to the right edge by the row's fill layout.
     target.style.flex = '0 1 auto'
     var badge = createBadge(stats)
     target.parentNode.insertBefore(badge, target.nextSibling)
@@ -150,3 +193,7 @@ function annotateToolDiffs(rootEl, root) {
 
 exports.diffStats = diffStats
 exports.annotateToolDiffs = annotateToolDiffs
+exports.createBadge = createBadge
+exports.diffPath = diffPath
+exports.ensureBadge = ensureBadge
+exports.findOfficialView = findOfficialView

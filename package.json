@@ -1,8 +1,12 @@
 {
   "name": "dsh-assistant-optimization",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Fold mis-rendered thinking/reasoning content into collapsible blocks and render mermaid diagrams inline.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/qianshe/dsh-assistant-optimization.git"
+  },
   "type": "module",
   "main": "lib/index.js",
   "exports": {

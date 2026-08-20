@@ -11,8 +11,8 @@
 // Module dependencies:
 //   markers.js    — localStorage marker CRUD
 //   text-split.js — splitText + transformBlocks
-//   tool-diff.js  — file-edit diff line count badges
-//   wrapper.js    — WrappedAssistantStep / WrappedToolCallTree + official renderer finders
+//   tool-diff.js  — file-edit diff line count badges (ensureBadge 幂等注入)
+//   wrapper.js    — WrappedAssistantStep / WrappedToolCallRow + official renderer finders
 //   mermaid.js    — MutationObserver + SVG rendering
 //   settings.js   — TagsSetting React component
 //
@@ -35,17 +35,24 @@ function apply(ctx) {
     );
   });
 
-  // 1b. Wrap official tool-call renderer to add file-edit diff badges
-  slots.inject("conversation.chat.node", function () {
-    return slots.register(
-      { name: "conversation.chat.node", key: "tool-call", priority: -1, locale: "conversation" },
-      function (rawProps) {
-        var official = findToolRenderer(slots);
-        var wrapperProps = Object.assign({}, rawProps, { _officialRenderer: official, _rawProps: rawProps });
-        return React.createElement(WrappedToolCallTree, wrapperProps);
-      }
-    );
-  });
+  // 1b. Wrap official tool-call *view* (write/edit) at the leaf-level
+  //     tool.call.toolview slot to add file-edit diff badges. Leaf-tier
+  //     shadow: does NOT declare children so it never 需要 renderSlot.
+  var diffKeys = ['write', 'edit'];
+  for (var di = 0; di < diffKeys.length; di++) {
+    (function (key) {
+      slots.inject("tool.call.toolview", function () {
+        return slots.register(
+          { name: "tool.call.toolview", key: key, priority: -1, locale: "conversation" },
+          function (rawProps) {
+            var official = findOfficialView(slots, key);
+            var wrapperProps = Object.assign({}, rawProps, { _officialRenderer: official, _rawProps: rawProps });
+            return React.createElement(WrappedToolCallRow, wrapperProps);
+          }
+        );
+      });
+    })(diffKeys[di]);
+  }
 
   // 2. Settings page
   slots.inject("settings.general.item", function () {

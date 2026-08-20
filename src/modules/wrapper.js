@@ -1,5 +1,6 @@
 // wrapper.js — wrap official assistant-step and tool-call renderers
-// Exports: createWrapper (returns WrappedAssistantStep + WrappedToolCallTree)
+// Exports: createWrapper (returns WrappedAssistantStep + WrappedToolCallRow),
+//          findOfficialRenderer, findToolRenderer, findOfficialView
 // Requires: React, text-split module, markers module, tool-diff module
 
 var _officialRendererCache = null;
@@ -37,10 +38,24 @@ function findToolRenderer(slots) {
   return null;
 }
 
+/** 从 slots 查找 tool.call.toolview 官方 priority 0 组件 */
+function findOfficialView(slots, toolName) {
+  try {
+    var entries = slots.entries('tool.call.toolview')
+    if (!entries) return null
+    for (var i = 0; i < entries.length; i++) {
+      var e = entries[i]
+      if (e.options.key === toolName && (e.options.priority || 0) === 0) return e.component
+    }
+  } catch (err) {}
+  return null
+}
+
 function createWrapper(React, textSplitMod, markersMod, toolDiffMod) {
   var transformBlocks = textSplitMod.transformBlocks;
   var loadMarkers = markersMod.loadMarkers;
-  var annotateToolDiffs = toolDiffMod ? toolDiffMod.annotateToolDiffs : null;
+  var ensureBadge = toolDiffMod ? toolDiffMod.ensureBadge : null;
+  var findOfficialView = toolDiffMod ? toolDiffMod.findOfficialView : null;
 
   function WrappedAssistantStep(props) {
     var officialRenderer = props._officialRenderer;
@@ -69,40 +84,42 @@ function createWrapper(React, textSplitMod, markersMod, toolDiffMod) {
     return React.createElement(officialRenderer, newProps);
   }
 
-  function WrappedToolCallTree(props) {
-    var officialRenderer = props._officialRenderer;
+  // 叶子层 wrapper：包裹官方 FileMutationRow（write/edit），幂等注入 diff 徽章。
+  // 关键：不声明 children→不需要 renderSlot；ensureBadge 幂等收敛，避免 MutationObserver 自触发卡死。
+  function WrappedToolCallRow(props) {
+    var official = props._officialRenderer;
     var ref = React.useRef(null);
-    var node = props.node;
-    var root = node && node.data && node.data.root;
+    var block = props.block;
 
     React.useEffect(function () {
       if (!ref.current) return;
-      if (root && annotateToolDiffs) annotateToolDiffs(ref.current, root);
-      // Tool calls stream in progressively; re-annotate whenever the tree
-      // mutates so late-arriving resultViews still get their badge.
+      if (ensureBadge) ensureBadge(ref.current, block);
       var obs = new MutationObserver(function () {
-        if (root && annotateToolDiffs) annotateToolDiffs(ref.current, root);
+        if (ref.current && ensureBadge) ensureBadge(ref.current, block);
       });
-      obs.observe(ref.current, { childList: true, subtree: true, characterData: true });
+      // 只观察 childList，不观察 characterData（避免文本流式更新误触发）
+      obs.observe(ref.current, { childList: true, subtree: true });
       return function () { obs.disconnect(); };
-    }, [root, officialRenderer, annotateToolDiffs]);
+    }, [block, official]);
 
-    if (!officialRenderer) return null;
+    if (!official) return null;
     return React.createElement(
       'div',
-      { ref: ref, className: 'dsao-tool-call-wrapper', style: { display: 'contents' } },
-      React.createElement(officialRenderer, props._rawProps || {})
+      { ref: ref, className: 'dsao-tool-view-row', style: { display: 'contents' } },
+      React.createElement(official, props._rawProps || {})
     );
   }
 
   return {
     WrappedAssistantStep: WrappedAssistantStep,
-    WrappedToolCallTree: WrappedToolCallTree,
+    WrappedToolCallRow: WrappedToolCallRow,
     findOfficialRenderer: findOfficialRenderer,
     findToolRenderer: findToolRenderer,
+    findOfficialView: findOfficialView,
   };
 }
 
 exports.createWrapper = createWrapper;
 exports.findOfficialRenderer = findOfficialRenderer;
 exports.findToolRenderer = findToolRenderer;
+exports.findOfficialView = findOfficialView;
