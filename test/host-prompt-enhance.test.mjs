@@ -314,4 +314,26 @@ const defaultModel = { currentSelection: () => selection }
   assert.equal(res.body.refBytes.instructionSource, 'none', 'the absence is reported')
 }
 
-console.log('host-prompt-enhance: 17 scenarios passed')
+// 18. The system prompt separates resolving a referent's identity from
+//     importing its data. A rewrite once "resolved" a reference by pasting the
+//     byte counts it found in the private reference — stale example values,
+//     stated as fact — so the contract must forbid carrying values across.
+{
+  let options
+  const route = mount({ llm: llmStub({ capture: (o) => { options = o } }), agentDefaultModel: defaultModel })
+  await call(route, { body: { text: 'hi', history: 'User: project 52 / instructions 340' } })
+  const system = options.system
+
+  assert.match(system, /IDENTITY, never import its DATA/, 'the identity/data split must be stated')
+  assert.match(system, /FORBIDDEN in the output/, 'reference-only values must be forbidden outright')
+  assert.match(system, /ask the agent to look it up instead of stating one/, 'the escape hatch must be a lookup request')
+  assert.match(system, /stale or illustrative values/, 'the reference may carry values that are no longer true')
+  assert.match(system, /naming is the limit/, 'naming a file must not license copying its contents')
+
+  // The two rules that previously conflicted must both still be present: one
+  // demands resolution, the other forbids fabrication.
+  assert.match(system, /Resolve ambiguity, do not delete it/, 'resolution is still required')
+  assert.match(system, /Never copy, summarize, quote, or restate/, 'the non-output contract is still stated')
+}
+
+console.log('host-prompt-enhance: 18 scenarios passed')
