@@ -4,9 +4,11 @@
 // model select and the context meter, but the button belongs immediately left
 // of the send button. There is no slot there, so the seat is used only as a
 // scoped anchor: the component renders a hidden marker, then inserts a plain
-// DOM button into the same `.trailing` container just before the primary
-// send/stop button. The button is not React-owned, so — exactly as with the
-// diff badge — placement is idempotent and cleanup is independent.
+// DOM button into the same `.trailing` container just before the first
+// primary button in the group (send alone when idle, stop+send while an
+// interrupt is available, so the button never separates stop from send). The
+// button is not React-owned, so — exactly as with the diff badge — placement
+// is idempotent and cleanup is independent.
 //
 // Feedback has three states: idle (sparkle), busy (spinning arc, brand color,
 // a sliding "增强中" label, aria-busy), and settled (green check for 1.4s or a
@@ -40,10 +42,12 @@ function ensureStyles(doc) {
   doc.head.appendChild(style)
 }
 
-/** The send/stop button ends the trailing row; the button goes just before it. */
+/** The primary button group (stop + send when an interrupt is available) ends
+ * the trailing row; the button goes just before the FIRST of them, so the
+ * group stays put and the button never wedges between stop and send. */
 function findPrimary(trailing) {
   var buttons = trailing.querySelectorAll('button[class*="primary"]')
-  return buttons.length === 0 ? null : buttons[buttons.length - 1]
+  return buttons.length === 0 ? null : buttons[0]
 }
 
 /**

@@ -86,7 +86,7 @@ dsh web
 
 ### 输入框层 —— Prompt 增强
 
-`conversation.input.right` 确实存在，但它渲染在模型选择器和上下文计量之**前**，而按钮该待的位置是发送按钮的正左边——那里没有 slot。所以注册项只在该位置渲染一个隐藏锚点，向上找到装着发送按钮的 `.trailing` 容器，把一个原生 DOM 按钮插到它前面，落位纪律与 diff 徽标相同。
+`conversation.input.right` 确实存在，但它渲染在模型选择器和上下文计量之**前**，而按钮该待的位置是发送按钮的正左边——那里没有 slot。所以注册项只在该位置渲染一个隐藏锚点，向上找到装着发送按钮的 `.trailing` 容器，把一个原生 DOM 按钮插到 primary 按钮组（空闲时只有发送；运行中可中断时额外出现停止按钮）的**第一个**之前，这样按钮只会占据工具行最右侧的开头位置，绝不会夹在停止与发送之间把停止按钮挤开，落位纪律与 diff 徽标相同。
 
 Host 半体声明 `inject: ['webServer']`，并注册一条仅限 loopback 的路由 `POST /api/dsao/prompt-enhance`。组合树里的行序**不保证服务可用性**：用 `ctx.get` 探测 `webServer` 会让插件在服务就绪前挂载，从而静默跳过注册。它通过 `ctx.agentDefaultModel.currentSelection()` 读取当前模型，发起一次 `ctx.llm.stream()`——不带工具、不带 `sessionId`、不创建会话、不写日志。返回文本经公开的 `inputActions.setDraft()` 落地，走输入状态机的正常写入路径，所以浏览器撤销依然可用。
 

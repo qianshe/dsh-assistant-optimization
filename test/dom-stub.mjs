@@ -1,7 +1,9 @@
-// Minimal DOM stub: just enough for createBadge/ensureBadge, which only need
-// element creation, sibling-aware insertion/removal, and two attribute
-// selectors. Keeping it hand-rolled avoids a jsdom dependency for a plugin
-// whose only build step is `node --check`.
+// Minimal DOM stub: just enough for createBadge/ensureBadge and the
+// prompt-enhance button placement, which only need element creation,
+// sibling-aware insertion/removal, two attribute selectors, and the
+// tag+class-substring selector for finding the primary buttons. Keeping it
+// hand-rolled avoids a jsdom dependency for a plugin whose only build step
+// is `node --check`.
 
 class StubElement {
   constructor(tagName) {
@@ -90,18 +92,30 @@ class StubElement {
     return out
   }
 
-  /** Supports only `[class*="..."]`, the selector ensureBadge uses for the file link. */
+  /**
+   * Supports `[class*="..."]`, and `tag[class*="..."]` (the latter is what
+   * prompt-enhance's findPrimary queries for the primary send/stop buttons).
+   */
   querySelector(selector) {
     const substring = /^\[class\*="(.+)"\]$/.exec(selector)
-    if (substring === null) throw new Error(`stub querySelector: unsupported selector ${selector}`)
-    return this.descendants().find((el) => el.className.includes(substring[1])) ?? null
+    if (substring !== null) return this.descendants().find((el) => el.className.includes(substring[1])) ?? null
+    throw new Error(`stub querySelector: unsupported selector ${selector}`)
   }
 
-  /** Supports only `[attr]` presence, the selector ensureBadge uses for existing badges. */
+  /**
+   * Supports `[attr]` presence, and `tag[class*="..."]` — the same two shapes
+   * the shipped bundle queries.
+   */
   querySelectorAll(selector) {
     const presence = /^\[([\w-]+)\]$/.exec(selector)
-    if (presence === null) throw new Error(`stub querySelectorAll: unsupported selector ${selector}`)
-    return this.descendants().filter((el) => el.getAttribute(presence[1]) !== null)
+    if (presence !== null) return this.descendants().filter((el) => el.getAttribute(presence[1]) !== null)
+    const tagClass = /^([A-Za-z]+)\[class\*="(.+)"\]$/.exec(selector)
+    if (tagClass !== null) {
+      const tag = tagClass[1].toUpperCase()
+      const substr = tagClass[2]
+      return this.descendants().filter((el) => el.tagName === tag && el.className.includes(substr))
+    }
+    throw new Error(`stub querySelectorAll: unsupported selector ${selector}`)
   }
 }
 

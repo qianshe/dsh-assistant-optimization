@@ -1,5 +1,10 @@
-// Verify the prompt-enhance button places itself just left of the send button
-// and cleans up independently of its React anchor.
+// Verify the prompt-enhance button places itself just left of the primary
+// button group (send alone when idle; stop+send while an interrupt is
+// available) and cleans up independently of its React anchor.
+//
+// The placement helpers are exercised straight off the shipped bundle via
+// its exports, not a local re-implementation — the mirrors that predated the
+// two-primary-button fix let this exact regression pass unnoticed.
 // Run: node test/prompt-enhance.test.mjs
 import assert from 'node:assert/strict'
 import { loadBundleModule } from './load-module.mjs'
@@ -14,10 +19,14 @@ const promptEnhance = loadBundleModule('dsao/prompt-enhance', (id) => (id === 'r
 
 assert.equal(promptEnhance.ENDPOINT, '/api/dsao/prompt-enhance', 'endpoint must match the host route')
 assert.equal(typeof promptEnhance.PromptEnhanceMount, 'function', 'mount component must be exported')
+assert.equal(typeof promptEnhance.ensurePlacement, 'function', 'ensurePlacement must be exported')
+assert.equal(typeof promptEnhance.findPrimary, 'function', 'findPrimary must be exported')
 
 // Rebuild the trailing row the official InputBar renders: plugin items, the
-// model seat, the context meter, then the primary send button last.
-function buildTrailing() {
+// model seat, the context meter, then the primary send button last. When
+// `interruptible` (a running subagent) the stop button is a second primary
+// button rendered between the meter and the send button.
+function buildTrailing({ interruptible = false } = {}) {
   const trailing = new StubElement('div')
   trailing.className = 'InputBar_trailing'
   const anchor = trailing.appendChild(new StubElement('span'))
@@ -26,9 +35,19 @@ function buildTrailing() {
   model.className = 'ModelSelect_root'
   const meter = trailing.appendChild(new StubElement('div'))
   meter.className = 'ContextMeter_root'
-  const primary = trailing.appendChild(new StubElement('button'))
-  primary.className = 'InputBar_primary'
-  return { trailing, anchor, model, meter, primary }
+
+  let stop = null
+  if (interruptible) {
+    stop = trailing.appendChild(new StubElement('button'))
+    stop.className = 'InputBar_primary InputBar_interruptible'
+    stop.setAttribute('data-input-stop', '')
+  }
+
+  const send = trailing.appendChild(new StubElement('button'))
+  send.className = 'InputBar_primary'
+  send.setAttribute('aria-label', 'send')
+
+  return { trailing, anchor, model, meter, stop, send }
 }
 
 function makeButton() {
@@ -37,64 +56,68 @@ function makeButton() {
   return btn
 }
 
-// The placement/cleanup pair is the interesting logic, so drive it exactly as
-// the component's effect does. Mirrors lib/client.js ensurePlacement.
-function findPrimary(trailing) {
-  const buttons = trailing.descendants().filter((el) => el.className.includes('primary'))
-  return buttons.length === 0 ? null : buttons[buttons.length - 1]
-}
-function ensurePlacement(trailing, btn) {
-  if (!trailing || !btn) return
-  const primary = findPrimary(trailing)
-  if (primary === null) {
-    if (btn.parentNode) btn.parentNode.removeChild(btn)
-    return
-  }
-  if (btn.parentNode === trailing && btn.nextElementSibling === primary) return
-  trailing.insertBefore(btn, primary)
-}
-
-// 1. The button lands immediately before the send button, after the meter.
+// 1. Idle: a single primary button (send) — the button lands immediately
+//    before it, right after the meter.
 {
-  const { trailing, primary, meter } = buildTrailing()
+  const { trailing, meter, send } = buildTrailing()
   const btn = makeButton()
-  ensurePlacement(trailing, btn)
-  assert.equal(btn.nextElementSibling, primary, 'button must sit directly before the send button')
+  promptEnhance.ensurePlacement(trailing, btn)
+  assert.equal(btn.nextElementSibling, send, 'button must sit directly before the send button')
   assert.equal(meter.nextElementSibling, btn, 'button must follow the context meter')
 }
 
-// 2. Placement is idempotent: no churn on repeat calls.
+// 2. Running subagent: the stop button is a second primary before send. The
+//    button must go before the STOP button (the first primary), so stop and
+//    send stay adjacent and the stop button is not displaced.
+{
+  const { trailing, meter, stop, send } = buildTrailing({ interruptible: true })
+  assert.notEqual(stop, null, 'interruptible build must include the stop button')
+  const btn = makeButton()
+  promptEnhance.ensurePlacement(trailing, btn)
+  assert.equal(btn.nextElementSibling, stop, 'button must sit before the stop button, not between stop and send')
+  assert.equal(stop.nextElementSibling, send, 'stop button must stay adjacent to the send button')
+  assert.equal(meter.nextElementSibling, btn, 'button must follow the context meter')
+}
+
+// 3. Placement is idempotent: no churn on repeat calls.
 {
   const { trailing } = buildTrailing()
   const btn = makeButton()
-  ensurePlacement(trailing, btn)
+  promptEnhance.ensurePlacement(trailing, btn)
   const before = trailing.children.length
-  ensurePlacement(trailing, btn)
-  ensurePlacement(trailing, btn)
+  promptEnhance.ensurePlacement(trailing, btn)
+  promptEnhance.ensurePlacement(trailing, btn)
   assert.equal(trailing.children.length, before, 'repeat placement must not duplicate children')
-  assert.equal(trailing.children.filter((c) => c.getAttribute('data-dsao-diff-badge') === null && c.getAttribute('data-dsao-enhance-btn') === '').length, 1, 'exactly one button')
+  assert.equal(trailing.children.filter((c) => c.getAttribute('data-dsao-enhance-btn') === '').length, 1, 'exactly one button')
 }
 
-// 3. A re-render that appends a new control after the send button re-anchors
-//    the button rather than leaving it stranded on the wrong side.
+// 4. The interrupt stop appears after the button already landed (an idle
+//    composer transitions to a running subagent). The button must re-anchor
+//    to before the new first primary, keeping the stop/send pair intact.
 {
-  const { trailing } = buildTrailing()
+  const { trailing, send } = buildTrailing()
   const btn = makeButton()
-  ensurePlacement(trailing, btn)
-  const later = trailing.appendChild(new StubElement('button'))
-  later.className = 'InputBar_primary'
-  ensurePlacement(trailing, btn)
-  assert.equal(btn.nextElementSibling, later, 'button must re-anchor to the last primary button')
+  promptEnhance.ensurePlacement(trailing, btn)
+  assert.equal(btn.nextElementSibling, send, 'button sits before send while idle')
+
+  const stop = new StubElement('button')
+  stop.className = 'InputBar_primary'
+  stop.setAttribute('aria-label', 'stop')
+  trailing.insertBefore(stop, send)
+
+  promptEnhance.ensurePlacement(trailing, btn)
+  assert.equal(btn.nextElementSibling, stop, 'button must re-anchor to before the newly-added stop')
+  assert.equal(stop.nextElementSibling, send, 'stop and send must stay adjacent')
 }
 
-// 4. Losing the send button removes the orphan instead of early-returning.
+// 5. Losing the send button removes the orphan instead of early-returning.
 {
-  const { trailing, primary } = buildTrailing()
+  const { trailing, send } = buildTrailing()
   const btn = makeButton()
-  ensurePlacement(trailing, btn)
-  trailing.removeChild(primary)
-  ensurePlacement(trailing, btn)
+  promptEnhance.ensurePlacement(trailing, btn)
+  trailing.removeChild(send)
+  promptEnhance.ensurePlacement(trailing, btn)
   assert.equal(btn.parentNode, null, 'an absent send button must drop the orphaned button')
 }
 
-console.log('prompt-enhance: 4 scenarios passed')
+console.log('prompt-enhance: 5 scenarios passed')
