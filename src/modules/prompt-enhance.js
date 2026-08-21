@@ -10,6 +10,12 @@
 // button is not React-owned, so — exactly as with the diff badge — placement
 // is idempotent and cleanup is independent.
 //
+// Subagent sessions render no button at all: `props.session.subagent` is
+// non-null there, the composer belongs to the delegated agent's own draft
+// flow, and while it runs the button would only jostle the interrupt
+// controls. The mount returns null and the effect bails before touching the
+// DOM or the network.
+//
 // Feedback has three states: idle (sparkle), busy (spinning arc, brand color,
 // a sliding "增强中" label, aria-busy), and settled (green check for 1.4s or a
 // red sparkle for 2.6s with the reason in the tooltip).
@@ -122,6 +128,13 @@ function createPromptEnhance(React, contextMod) {
    * owns a plain DOM button placed beside the send button.
    */
   function PromptEnhanceMount(props) {
+    // A subagent composer belongs to the delegated agent, not the user's draft
+    // flow: the enhance button would only occupy the tool row (and, while the
+    // subagent runs, jostle the interrupt controls). Hide the button and skip
+    // all placement/network logic -- no anchor, no button, no controller.
+    var isSubagent = props.session !== null && typeof props.session === 'object' &&
+      props.session.subagent !== null && props.session.subagent !== undefined
+
     var markerRef = React.useRef(null)
     var apiRef = React.useRef(null)
     var stateRef = React.useRef({ blocked: true, busy: false })
@@ -145,6 +158,7 @@ function createPromptEnhance(React, contextMod) {
     contextRef.current = contextMod.readContext(props.session, sessions, workspaces)
 
     React.useEffect(function () {
+      if (isSubagent) return
       var marker = markerRef.current
       if (!marker || !marker.parentNode) return
       var doc = marker.ownerDocument
@@ -314,7 +328,7 @@ function createPromptEnhance(React, contextMod) {
       if (apiRef.current !== null) apiRef.current.render()
     }, [blocked])
 
-    return React.createElement('span', {
+    return isSubagent ? null : React.createElement('span', {
       ref: markerRef,
       'data-dsao-enhance-anchor': '',
       style: { display: 'none' },

@@ -14,8 +14,19 @@ installStubDocument()
 
 // The module only needs React.useRef/useEffect shapes at load time; the DOM
 // helpers under test are plain functions reached through the module's exports.
-const reactStub = { useRef: () => ({ current: null }), useEffect: () => {}, createElement: () => null }
-const promptEnhance = loadBundleModule('dsao/prompt-enhance', (id) => (id === 'react' ? reactStub : {}))
+// createElement records what the mount would render so we can assert that a
+// subagent composer renders nothing while a normal composer renders the span.
+const renderCalls = []
+const reactStub = {
+  useRef: () => ({ current: null }),
+  useEffect: () => {},
+  createElement: (type, props) => { renderCalls.push({ type, props }); return null },
+}
+const contextStub = {
+  readContext: () => ({ project: '', cwd: '', instructions: '', summary: '', history: '', replies: '' }),
+}
+const promptEnhance = loadBundleModule('dsao/prompt-enhance', (id) =>
+  id === 'react' ? reactStub : id === 'dsao/context' ? contextStub : {})
 
 assert.equal(promptEnhance.ENDPOINT, '/api/dsao/prompt-enhance', 'endpoint must match the host route')
 assert.equal(typeof promptEnhance.PromptEnhanceMount, 'function', 'mount component must be exported')
@@ -120,4 +131,35 @@ function makeButton() {
   assert.equal(btn.parentNode, null, 'an absent send button must drop the orphaned button')
 }
 
-console.log('prompt-enhance: 5 scenarios passed')
+// 6. A subagent composer renders nothing at all: no hidden anchor, so no
+//    button, no placement, no network logic.
+{
+  const subagentSession = {
+    sessionId: 'sa-1',
+    subagent: { address: { mode: 'continuable' }, parentAvailable: true },
+  }
+  const before = renderCalls.length
+  promptEnhance.PromptEnhanceMount({
+    session: subagentSession,
+    input: { draft: '继续', phase: 'plain' },
+    inputActions: { setDraft: () => {} },
+  })
+  assert.equal(renderCalls.length, before, 'subagent composer must not render the anchor span')
+}
+
+// 7. A normal (non-subagent) composer still renders the hidden anchor.
+{
+  const normalSession = { sessionId: 's-1', subagent: null }
+  const before = renderCalls.length
+  const el = promptEnhance.PromptEnhanceMount({
+    session: normalSession,
+    input: { draft: '继续', phase: 'plain' },
+    inputActions: { setDraft: () => {} },
+  })
+  assert.equal(renderCalls.length, before + 1, 'normal composer must render the hidden anchor')
+  assert.equal(el, null, 'createElement stub returns null as the element')
+  assert.equal(renderCalls[before].type, 'span', 'the anchor must be a span')
+  assert.equal(renderCalls[before].props['data-dsao-enhance-anchor'], '', 'the anchor marker attribute must be set')
+}
+
+console.log('prompt-enhance: 7 scenarios passed')
