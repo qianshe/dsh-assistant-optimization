@@ -36,13 +36,31 @@ function loadMermaid() {
   return _mermaidLoaded;
 }
 
+/**
+ * Mermaid v11 injects a temporary container (bearing the render id) into
+ * document.body during render. On success it removes the container; on a
+ * syntax error it leaves the container — now holding an error SVG — in the
+ * DOM, which surfaces as "Syntax error … mermaid version X" at the page
+ * bottom. Clean it up on every outcome so errors never reach the UI.
+ */
+function _cleanupMermaidTemp(id) {
+  var candidates = [id, "d" + id];
+  for (var i = 0; i < candidates.length; i++) {
+    var node = document.getElementById(candidates[i]);
+    if (node && node.parentNode) node.parentNode.removeChild(node);
+  }
+}
+
 function renderMermaidBlock(el, code) {
   loadMermaid().then(function (mermaid) {
     if (!mermaid) return;
     var id = "mmd-" + (++_mermaidSeq);
     try {
-      mermaid.render(id, code).then(function (result) { _mountMermaid(el, result.svg); }).catch(function () {});
-    } catch (e) {}
+      mermaid.render(id, code).then(function (result) {
+        _cleanupMermaidTemp(id);
+        _mountMermaid(el, result.svg);
+      }).catch(function () { _cleanupMermaidTemp(id); });
+    } catch (e) { _cleanupMermaidTemp(id); }
   });
 }
 
