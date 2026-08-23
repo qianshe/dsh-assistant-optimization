@@ -389,14 +389,16 @@ const defaultModel = { currentSelection: () => selection }
   for (const marker of [
     /source of truth/,
     /Razor rule/,
-    /Internal workflow, applied silently/,
     /Preserve the task mode/,
+    /propose lightweight options/,
+    /defer high-risk/,
     /Do not pretend you inspected the repository/,
     /Use sections sparingly/,
     /Output ONLY the rewritten prompt/,
   ]) {
-    assert.match(system, marker, `the tiller baseline rule ${marker} must be present`)
+    assert.match(system, marker, `the baseline rule ${marker} must be present`)
   }
+  assert.doesNotMatch(system, /Internal workflow, applied silently/, 'the workflow rule was merged into Core rule')
 
   // Our one addition, with the no-fabrication clause folded into it rather than
   // standing as its own rule.
@@ -408,7 +410,7 @@ const defaultModel = { currentSelection: () => selection }
 
   // Budget guard: the prompt must stay compact enough to keep every rule salient.
   const rules = system.split('\n\n')
-  assert.ok(rules.length <= 12, `the prompt must stay at most 12 rules, got ${rules.length}`)
+  assert.ok(rules.length <= 10, `the prompt must stay at most 10 rules, got ${rules.length}`)
 
   // The reference parts are labelled by role, so asks and results stay distinct
   // rather than merging back into one undifferentiated transcript.
