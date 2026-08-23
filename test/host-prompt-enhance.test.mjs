@@ -417,4 +417,174 @@ const defaultModel = { currentSelection: () => selection }
   assert.doesNotMatch(sent, /Recent conversation:/, 'the reference is never a raw transcript')
 }
 
-console.log('host-prompt-enhance: 18 scenarios passed')
+// ── Tool-assisted enhance: context_search as an optional search round ──
+
+// 19. With the search tool available, the tool-aware system prompt carries
+//     the proactive-use policy, and a draft that needs it runs exactly one
+//     search round: the registry executes the call (pinned to the session
+//     cwd), the result rides back as a tool-result message, and the forced
+//     text-only final pass delivers the rewrite.
+{
+  const executed = []
+  const tools = {
+    get: (name) => (name === 'context_search' ? { name, description: 'd', parameters: {} } : undefined),
+    execute: async (exec) => {
+      executed.push(exec)
+      return { isError: false, value: 'report', content: [{ type: 'text', text: 'Found 1 file: src/a.js (L1-20)' }] }
+    },
+  }
+  const captured = []
+  let i = 0
+  const llm = {
+    stream(options) {
+      captured.push(options)
+      i += 1
+      if (i === 1) return (async function* () {
+        yield { type: 'block-end', index: 1, block: { type: 'tool-call', id: 'call_1', name: 'context_search', arguments: '{"query":"badge colour"}' } }
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+      })()
+      return (async function* () {
+        yield { type: 'text-delta', index: 0, text: 'final rewrite' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    },
+  }
+  const route = mount({ llm, agentDefaultModel: defaultModel, tools })
+  const res = await call(route, { body: { text: 'fix the badge', cwd: 'D:/proj/dsao' } })
+  assert.equal(res.status, 200)
+  assert.equal(res.body.text, 'final rewrite', 'the final pass delivers the rewrite')
+  assert.equal(res.body.searches, 1, 'the executed search is reported')
+
+  assert.equal(captured.length, 2, 'two model passes: search round + forced final answer')
+  assert.ok(Array.isArray(captured[0].tools) && captured[0].tools[0].name === 'context_search', 'pass 1 offers the tool')
+  assert.equal(captured[1].tools, undefined, 'the final pass is forced text-only')
+  assert.match(captured[0].system, /Use it proactively/, 'the tool policy pushes proactive use')
+  assert.match(captured[0].system, /One round of searching at most/, 'the tool policy caps the round')
+
+  assert.equal(executed.length, 1, 'the registry executed exactly one tool call')
+  assert.equal(executed[0].callId, 'call_1', 'the provider call id correlates the result')
+  assert.equal(executed[0].arguments.query, 'badge colour', 'model arguments arrive parsed')
+  assert.equal(executed[0].arguments.project_path, 'D:/proj/dsao', 'the search is pinned to the session cwd')
+
+  const msgs = captured[1].messages
+  assert.equal(msgs.length, 3, 'pass 2 sees draft + assistant call + tool result')
+  assert.equal(msgs[1].role, 'assistant', 'the model call is replayed as an assistant message')
+  assert.equal(msgs[1].content[0].type, 'tool-call')
+  assert.equal(msgs[2].content[0].type, 'tool-result')
+  assert.equal(msgs[2].content[0].toolCallId, 'call_1')
+  assert.equal(msgs[2].source.kind, 'tool', 'the result carries the tool source')
+}
+
+// 20. A specific draft skips the search: the tool is offered, the model stops
+//     directly, no registry call happens, and the pass count stays one.
+{
+  const tools = {
+    get: () => ({ name: 'context_search', description: 'd', parameters: {} }),
+    execute: async () => { throw new Error('the search must not run for a specific draft') },
+  }
+  let count = 0
+  const llm = {
+    stream() {
+      count += 1
+      return (async function* () {
+        yield { type: 'text-delta', index: 0, text: 'ok' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    },
+  }
+  const route = mount({ llm, agentDefaultModel: defaultModel, tools })
+  const res = await call(route, { body: { text: 'rename the flag in a.js' } })
+  assert.equal(res.status, 200)
+  assert.equal(count, 1, 'no tool call means a single pass')
+  assert.equal(res.body.searches, 0, 'a skipped search reports zero')
+}
+
+// 21. A failing search degrades to an error tool result; the final pass still
+//     delivers the rewrite — a tool failure never sinks the call.
+{
+  const tools = {
+    get: () => ({ name: 'context_search', description: 'd', parameters: {} }),
+    execute: async () => ({ isError: true, error: { message: 'boom' }, content: [{ type: 'text', text: 'boom' }] }),
+  }
+  let i = 0
+  let second
+  const llm = {
+    stream(options) {
+      i += 1
+      if (i === 2) second = options
+      if (i === 1) return (async function* () {
+        yield { type: 'block-end', index: 1, block: { type: 'tool-call', id: 'c9', name: 'context_search', arguments: '{}' } }
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+      })()
+      return (async function* () {
+        yield { type: 'text-delta', index: 0, text: 'rewrite without search' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    },
+  }
+  const route = mount({ llm, agentDefaultModel: defaultModel, tools })
+  const res = await call(route, { body: { text: 'hi', cwd: 'D:/p' } })
+  assert.equal(res.status, 200, 'a search failure must not sink the call')
+  assert.equal(res.body.text, 'rewrite without search')
+  assert.equal(second.messages[2].content[0].isError, true, 'the failure rides back as an error result')
+}
+
+// 22. A model that rejects the tool schemas dies on pass 1 with no output; the
+//     plain retry still delivers the rewrite.
+{
+  let i = 0
+  let second
+  const llm = {
+    stream(options) {
+      i += 1
+      if (i === 2) second = options
+      if (i === 1) return (async function* () {
+        yield { type: 'finish', reason: { kind: 'error', failure: { message: 'tools unsupported', code: 'BAD_REQ' } } }
+      })()
+      return (async function* () {
+        yield { type: 'text-delta', index: 0, text: 'plain rewrite' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    },
+  }
+  const tools = {
+    get: () => ({ name: 'context_search', description: 'd', parameters: {} }),
+    execute: async () => ({ isError: false, value: '', content: [] }),
+  }
+  const route = mount({ llm, agentDefaultModel: defaultModel, tools })
+  const res = await call(route, { body: { text: 'hi' } })
+  assert.equal(res.status, 200, 'the plain retry must recover')
+  assert.equal(res.body.text, 'plain rewrite')
+  assert.equal(second.tools, undefined, 'the retry is tool-free')
+}
+
+// 23. Malformed tool arguments degrade to an empty object (plus the cwd pin);
+//     the round completes and the final rewrite is still delivered.
+{
+  let argsSeen
+  const tools = {
+    get: () => ({ name: 'context_search', description: 'd', parameters: {} }),
+    execute: async (exec) => { argsSeen = exec.arguments; return { isError: false, value: '', content: [{ type: 'text', text: 'ok' }] } },
+  }
+  let i = 0
+  const llm = {
+    stream() {
+      i += 1
+      if (i === 1) return (async function* () {
+        yield { type: 'block-end', index: 1, block: { type: 'tool-call', id: 'c1', name: 'context_search', arguments: '{not json' } }
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+      })()
+      return (async function* () {
+        yield { type: 'text-delta', index: 0, text: 'done' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    },
+  }
+  const route = mount({ llm, agentDefaultModel: defaultModel, tools })
+  const res = await call(route, { body: { text: 'hi', cwd: 'D:/p' } })
+  assert.equal(res.status, 200)
+  assert.equal(res.body.text, 'done')
+  assert.deepEqual(argsSeen, { project_path: 'D:/p' }, 'bad arguments degrade to the cwd pin alone')
+}
+
+console.log('host-prompt-enhance: 23 scenarios passed')

@@ -72,7 +72,7 @@ function ensurePlacement(trailing, btn) {
 }
 
 /** Condense the Host's refBytes diagnostic into one tooltip line. */
-function refSummary(refBytes) {
+function refSummary(refBytes, searches) {
   if (refBytes === null || typeof refBytes !== 'object') return ''
   var num = function (v) { return typeof v === 'number' ? v : 0 }
   var src = typeof refBytes.instructionSource === 'string' ? refBytes.instructionSource : '?'
@@ -80,7 +80,8 @@ function refSummary(refBytes) {
     ' / instructions ' + num(refBytes.instructions) + ' (' + src + ')' +
     ' / summary ' + num(refBytes.summary) +
     ' / asks ' + num(refBytes.history) +
-    ' / results ' + num(refBytes.replies)
+    ' / results ' + num(refBytes.replies) +
+    (num(searches) > 0 ? ' / searches ' + num(searches) : '')
 }
 
 /**
@@ -295,10 +296,10 @@ function createPromptEnhance(React, contextMod) {
           replies: ref.replies,
         }, controller.signal).then(function (reply) {
           if (reply.text.trim() !== '') actions.setDraft(reply.text)
-          lastRefRef.current = refSummary(reply.refBytes)
+          lastRefRef.current = refSummary(reply.refBytes, reply.searches)
           settle(true, '')
         }).catch(function (err) {
-          lastRefRef.current = refSummary(err && err.refBytes)
+          lastRefRef.current = refSummary(err && err.refBytes, err && err.searches)
           settle(false, err && err.message ? err.message : String(err))
         }).then(function () {
           stateRef.current.busy = false
