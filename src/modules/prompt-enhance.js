@@ -38,6 +38,7 @@ var CSS = [
   '[data-dsao-enhance-btn] .dsao-enh-spinner{transform-origin:8px 8px;animation:dsao-enh-spin .7s linear infinite}',
   '[data-dsao-enhance-btn] .dsao-enh-label{max-width:0;opacity:0;overflow:hidden;white-space:nowrap;transition:max-width 180ms ease,opacity 180ms ease,margin-left 180ms ease;margin-left:0}',
   '[data-dsao-enhance-btn][data-state="busy"] .dsao-enh-label{max-width:52px;opacity:1;margin-left:4px}',
+  '[data-dsao-enhance-btn][data-state="done"] .dsao-enh-label{max-width:88px;opacity:1;margin-left:4px;color:var(--dsw-alias-state-success-primary)}',
 ].join('\n')
 
 function ensureStyles(doc) {
@@ -246,19 +247,27 @@ function createPromptEnhance(React, contextMod) {
         return diag === '' ? IDLE_TITLE : IDLE_TITLE + '\n' + diag
       }
 
-      var settle = function (ok, why) {
+      var settle = function (ok, why, rounds) {
         clearSettle()
         icon.setAttribute('d', ok ? PATH_CHECK : PATH_SPARKLE)
         btn.style.color = ok
           ? 'var(--dsw-alias-state-success-primary)'
           : 'var(--dsw-alias-state-error-primary)'
         var diag = lastRefRef.current
-        btn.title = ok
-          ? idleTitle()
-          : 'Prompt 增强失败：' + why + (diag === '' ? '' : '\n' + diag)
+        if (ok && typeof rounds === 'number' && rounds > 0) {
+          label.textContent = '搜索×' + rounds
+          btn.setAttribute('data-state', 'done')
+          btn.title = '增强完成 · 搜索 ' + rounds + ' 轮' + (diag === '' ? '' : '\n' + diag)
+        } else {
+          btn.title = ok
+            ? idleTitle()
+            : 'Prompt 增强失败：' + why + (diag === '' ? '' : '\n' + diag)
+        }
         settleTimer = setTimeout(function () {
           icon.setAttribute('d', PATH_SPARKLE)
           btn.style.color = IDLE_COLOR
+          btn.setAttribute('data-state', 'idle')
+          label.textContent = BUSY_LABEL
           btn.title = idleTitle()
           settleTimer = null
         }, ok ? 1400 : 2600)
@@ -297,10 +306,10 @@ function createPromptEnhance(React, contextMod) {
         }, controller.signal).then(function (reply) {
           if (reply.text.trim() !== '') actions.setDraft(reply.text)
           lastRefRef.current = refSummary(reply.refBytes, reply.searches)
-          settle(true, '')
+          settle(true, '', typeof reply.rounds === 'number' ? reply.rounds : 0)
         }).catch(function (err) {
           lastRefRef.current = refSummary(err && err.refBytes, err && err.searches)
-          settle(false, err && err.message ? err.message : String(err))
+          settle(false, err && err.message ? err.message : String(err), 0)
         }).then(function () {
           stateRef.current.busy = false
           controller = null
