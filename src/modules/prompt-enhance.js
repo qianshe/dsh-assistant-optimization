@@ -38,7 +38,6 @@ var CSS = [
   '[data-dsao-enhance-btn] .dsao-enh-spinner{transform-origin:8px 8px;animation:dsao-enh-spin .7s linear infinite}',
   '[data-dsao-enhance-btn] .dsao-enh-label{max-width:0;opacity:0;overflow:hidden;white-space:nowrap;transition:max-width 180ms ease,opacity 180ms ease,margin-left 180ms ease;margin-left:0}',
   '[data-dsao-enhance-btn][data-state="busy"] .dsao-enh-label{max-width:52px;opacity:1;margin-left:4px}',
-  '[data-dsao-enhance-btn][data-state="done"] .dsao-enh-label{max-width:88px;opacity:1;margin-left:4px;color:var(--dsw-alias-state-success-primary)}',
 ].join('\n')
 
 function ensureStyles(doc) {
@@ -72,17 +71,13 @@ function ensurePlacement(trailing, btn) {
   trailing.insertBefore(btn, primary)
 }
 
-/** Condense the Host's refBytes diagnostic into one tooltip line. */
-function refSummary(refBytes, searches) {
-  if (refBytes === null || typeof refBytes !== 'object') return ''
-  var num = function (v) { return typeof v === 'number' ? v : 0 }
-  var src = typeof refBytes.instructionSource === 'string' ? refBytes.instructionSource : '?'
-  return '上次上下文：project ' + num(refBytes.project) +
-    ' / instructions ' + num(refBytes.instructions) + ' (' + src + ')' +
-    ' / summary ' + num(refBytes.summary) +
-    ' / asks ' + num(refBytes.history) +
-    ' / results ' + num(refBytes.replies) +
-    (num(searches) > 0 ? ' / searches ' + num(searches) : '')
+/** One-line summary of the last enhance for the idle tooltip. */
+function searchSummary(rounds, searches) {
+  var r = typeof rounds === 'number' ? rounds : 0
+  var s = typeof searches === 'number' ? searches : 0
+  if (r === 0 && s === 0) return ''
+  if (r === s) return '上次搜索：' + r + ' 轮'
+  return '上次搜索：' + r + ' 轮 / ' + s + ' 次调用'
 }
 
 /**
@@ -241,33 +236,24 @@ function createPromptEnhance(React, contextMod) {
         icon.style.display = ''
       }
 
-      /** Idle tooltip carries the last context sizes, for diagnosis. */
+      /** Idle tooltip shows the last search stats when available. */
       var idleTitle = function () {
         var diag = lastRefRef.current
         return diag === '' ? IDLE_TITLE : IDLE_TITLE + '\n' + diag
       }
 
-      var settle = function (ok, why, rounds) {
+      var settle = function (ok, why) {
         clearSettle()
         icon.setAttribute('d', ok ? PATH_CHECK : PATH_SPARKLE)
         btn.style.color = ok
           ? 'var(--dsw-alias-state-success-primary)'
           : 'var(--dsw-alias-state-error-primary)'
-        var diag = lastRefRef.current
-        if (ok && typeof rounds === 'number' && rounds > 0) {
-          label.textContent = '搜索×' + rounds
-          btn.setAttribute('data-state', 'done')
-          btn.title = '增强完成 · 搜索 ' + rounds + ' 轮' + (diag === '' ? '' : '\n' + diag)
-        } else {
-          btn.title = ok
-            ? idleTitle()
-            : 'Prompt 增强失败：' + why + (diag === '' ? '' : '\n' + diag)
-        }
+        btn.title = ok
+          ? idleTitle()
+          : 'Prompt 增强失败：' + why
         settleTimer = setTimeout(function () {
           icon.setAttribute('d', PATH_SPARKLE)
           btn.style.color = IDLE_COLOR
-          btn.setAttribute('data-state', 'idle')
-          label.textContent = BUSY_LABEL
           btn.title = idleTitle()
           settleTimer = null
         }, ok ? 1400 : 2600)
@@ -305,11 +291,10 @@ function createPromptEnhance(React, contextMod) {
           replies: ref.replies,
         }, controller.signal).then(function (reply) {
           if (reply.text.trim() !== '') actions.setDraft(reply.text)
-          lastRefRef.current = refSummary(reply.refBytes, reply.searches)
-          settle(true, '', typeof reply.rounds === 'number' ? reply.rounds : 0)
+          lastRefRef.current = searchSummary(reply.rounds, reply.searches)
+          settle(true, '')
         }).catch(function (err) {
-          lastRefRef.current = refSummary(err && err.refBytes, err && err.searches)
-          settle(false, err && err.message ? err.message : String(err), 0)
+          settle(false, err && err.message ? err.message : String(err))
         }).then(function () {
           stateRef.current.busy = false
           controller = null
@@ -351,5 +336,5 @@ function createPromptEnhance(React, contextMod) {
 exports.createPromptEnhance = createPromptEnhance
 exports.ensurePlacement = ensurePlacement
 exports.findPrimary = findPrimary
-exports.refSummary = refSummary
+exports.searchSummary = searchSummary
 exports.ENDPOINT = ENDPOINT
