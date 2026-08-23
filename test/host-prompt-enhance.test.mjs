@@ -455,11 +455,11 @@ const defaultModel = { currentSelection: () => selection }
   assert.equal(res.body.text, 'final rewrite', 'the final pass delivers the rewrite')
   assert.equal(res.body.searches, 1, 'the executed search is reported')
 
-  assert.equal(captured.length, 2, 'two model passes: search round + forced final answer')
+  assert.equal(captured.length, 2, 'two model passes: search round + the stopping pass')
   assert.ok(Array.isArray(captured[0].tools) && captured[0].tools[0].name === 'context_search', 'pass 1 offers the tool')
-  assert.equal(captured[1].tools, undefined, 'the final pass is forced text-only')
+  assert.ok(Array.isArray(captured[1].tools), 'the tool stays offered while rounds remain; the model chose to stop')
   assert.match(captured[0].system, /Use it proactively/, 'the tool policy pushes proactive use')
-  assert.match(captured[0].system, /One round of searching at most/, 'the tool policy caps the round')
+  assert.match(captured[0].system, /up to three rounds/, 'the tool policy allows up to three rounds')
 
   assert.equal(executed.length, 1, 'the registry executed exactly one tool call')
   assert.equal(executed[0].callId, 'call_1', 'the provider call id correlates the result')
@@ -587,4 +587,125 @@ const defaultModel = { currentSelection: () => selection }
   assert.deepEqual(argsSeen, { project_path: 'D:/p' }, 'bad arguments degrade to the cwd pin alone')
 }
 
-console.log('host-prompt-enhance: 23 scenarios passed')
+// 24. A first hit that is not enough gets a refined second round: the tool
+//     stays offered while rounds remain, both rounds execute, and the model
+//     stops with the tool still available.
+{
+  const executed = []
+  const tools = {
+    get: () => ({ name: 'context_search', description: 'd', parameters: {} }),
+    execute: async (exec) => {
+      executed.push(exec)
+      return { isError: false, value: '', content: [{ type: 'text', text: 'candidates' }] }
+    },
+  }
+  const captured = []
+  let i = 0
+  const llm = {
+    stream(options) {
+      captured.push(options)
+      i += 1
+      if (i <= 2) return (async function* () {
+        yield { type: 'block-end', index: 1, block: { type: 'tool-call', id: `a${i}`, name: 'context_search', arguments: '{}' } }
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+      })()
+      return (async function* () {
+        yield { type: 'text-delta', index: 0, text: 'final after two rounds' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    },
+  }
+  const route = mount({ llm, agentDefaultModel: defaultModel, tools })
+  const res = await call(route, { body: { text: 'fix the badge', cwd: 'D:/p' } })
+  assert.equal(res.status, 200)
+  assert.equal(res.body.text, 'final after two rounds')
+  assert.equal(res.body.searches, 2, 'both rounds are reported')
+  assert.equal(captured.length, 3, 'two search passes + the stopping pass')
+  assert.equal(executed.length, 2, 'both tool calls executed')
+  assert.ok(Array.isArray(captured[1].tools), 'the tool stays offered while rounds remain')
+  assert.equal(executed[1].arguments.project_path, 'D:/p', 'every round is pinned to the cwd')
+}
+
+// 25. The budget is spent after three rounds: the forced final pass runs
+//     tool-free with an explicit "return the final prompt" nudge, and the
+//     same system prompt still binds that answer.
+{
+  const executed = []
+  const tools = {
+    get: () => ({ name: 'context_search', description: 'd', parameters: {} }),
+    execute: async (exec) => {
+      executed.push(exec)
+      return { isError: false, value: '', content: [{ type: 'text', text: 'candidates' }] }
+    },
+  }
+  const captured = []
+  let i = 0
+  const llm = {
+    stream(options) {
+      captured.push(options)
+      i += 1
+      if (i <= 3) return (async function* () {
+        yield { type: 'block-end', index: 1, block: { type: 'tool-call', id: `b${i}`, name: 'context_search', arguments: '{}' } }
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+      })()
+      return (async function* () {
+        yield { type: 'text-delta', index: 0, text: 'final after budget' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    },
+  }
+  const route = mount({ llm, agentDefaultModel: defaultModel, tools })
+  const res = await call(route, { body: { text: 'fix the badge', cwd: 'D:/p' } })
+  assert.equal(res.status, 200)
+  assert.equal(res.body.searches, 3, 'exactly the budget of three rounds ran')
+  assert.equal(executed.length, 3)
+  assert.equal(captured.length, 4, 'three search passes + the forced final pass')
+  assert.equal(captured[3].tools, undefined, 'the final pass is tool-free')
+  const lastMsg = captured[3].messages.at(-1)
+  assert.equal(lastMsg.role, 'user')
+  assert.match(lastMsg.content[0].text, /search budget is spent/, 'the budget nudge precedes the final pass')
+  assert.equal(captured[3].system, captured[0].system, 'the final answer runs under the same system prompt')
+}
+
+// 26. Degenerate: the model still asks for a search on a tool-free pass after
+//     the budget. A synthetic refusal closes the loop and one last pass
+//     delivers the rewrite — the fourth call is never executed.
+{
+  const executed = []
+  const tools = {
+    get: () => ({ name: 'context_search', description: 'd', parameters: {} }),
+    execute: async (exec) => {
+      executed.push(exec)
+      return { isError: false, value: '', content: [{ type: 'text', text: 'candidates' }] }
+    },
+  }
+  const captured = []
+  let i = 0
+  const llm = {
+    stream(options) {
+      captured.push(options)
+      i += 1
+      if (i <= 4) return (async function* () {
+        yield { type: 'block-end', index: 1, block: { type: 'tool-call', id: `d${i}`, name: 'context_search', arguments: '{}' } }
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+      })()
+      return (async function* () {
+        yield { type: 'text-delta', index: 0, text: 'final after refusal' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    },
+  }
+  const route = mount({ llm, agentDefaultModel: defaultModel, tools })
+  const res = await call(route, { body: { text: 'fix the badge', cwd: 'D:/p' } })
+  assert.equal(res.status, 200, 'the refusal path must still deliver the rewrite')
+  assert.equal(res.body.text, 'final after refusal')
+  assert.equal(res.body.searches, 3, 'only the budgeted calls execute')
+  assert.equal(executed.length, 3, 'the leftover call is never executed')
+  assert.equal(captured.length, 5, 'three rounds + forced pass + refusal pass')
+  const refusal = captured[4].messages.at(-1)
+  assert.equal(refusal.content[0].type, 'tool-result')
+  assert.equal(refusal.content[0].isError, true, 'the leftover call gets an error result')
+  assert.match(refusal.content[0].content[0].text, /no more searches/)
+}
+
+console.log('host-prompt-enhance: 26 scenarios passed')
