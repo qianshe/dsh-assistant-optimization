@@ -72,11 +72,11 @@ function ensurePlacement(trailing, btn) {
 }
 
 /** One-line summary of the last enhance for the idle tooltip. */
-function searchSummary(rounds, searches) {
-  var r = typeof rounds === 'number' ? rounds : 0
+function searchSummary(llmCalls, searches) {
+  var c = typeof llmCalls === 'number' ? llmCalls : 0
   var s = typeof searches === 'number' ? searches : 0
-  if (r === 0 || s === 0) return ''
-  return s + ' 调用 / ' + r + ' 搜索'
+  if (c === 0 || s === 0) return ''
+  return c + ' 调用 / ' + s + ' 搜索'
 }
 
 /**
@@ -113,7 +113,7 @@ function requestEnhance(payload, signal) {
         err.refBytes = bag.refBytes
         throw err
       }
-      return { text: bag.text, refBytes: bag.refBytes, rounds: bag.rounds, searches: bag.searches }
+      return { text: bag.text, refBytes: bag.refBytes, llmCalls: bag.llmCalls, searches: bag.searches }
     })
   })
 }
@@ -290,7 +290,7 @@ function createPromptEnhance(React, contextMod) {
           replies: ref.replies,
         }, controller.signal).then(function (reply) {
           if (reply.text.trim() !== '') actions.setDraft(reply.text)
-          lastRefRef.current = searchSummary(reply.rounds, reply.searches)
+          lastRefRef.current = searchSummary(reply.llmCalls, reply.searches)
           settle(true, '')
         }).catch(function (err) {
           settle(false, err && err.message ? err.message : String(err))
