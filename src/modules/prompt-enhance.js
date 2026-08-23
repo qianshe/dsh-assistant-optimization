@@ -75,7 +75,6 @@ function ensurePlacement(trailing, btn) {
 function searchSummary(llmCalls, searches) {
   var c = typeof llmCalls === 'number' ? llmCalls : 0
   var s = typeof searches === 'number' ? searches : 0
-  if (c === 0 || s === 0) return ''
   return c + ' 调用 / ' + s + ' 搜索'
 }
 
