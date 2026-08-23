@@ -25,7 +25,7 @@
 var ENDPOINT = '/api/dsao/prompt-enhance'
 var SVG_NS = 'http://www.w3.org/2000/svg'
 var IDLE_COLOR = 'var(--dsw-alias-label-secondary)'
-var IDLE_TITLE = 'Prompt 增强 — 用当前模型改写草稿'
+var IDLE_TITLE = 'Prompt 增强'
 var BUSY_TITLE = '正在增强…'
 var BUSY_LABEL = '增强中'
 var PATH_SPARKLE = 'M6.5 1.5l1.1 2.9 2.9 1.1-2.9 1.1-1.1 2.9-1.1-2.9L2.5 5.5l2.9-1.1zM12 9l.65 1.65L14.3 11.3l-1.65.65L12 13.6l-.65-1.65L9.7 11.3l1.65-.65z'
@@ -75,9 +75,8 @@ function ensurePlacement(trailing, btn) {
 function searchSummary(rounds, searches) {
   var r = typeof rounds === 'number' ? rounds : 0
   var s = typeof searches === 'number' ? searches : 0
-  if (r === 0 && s === 0) return ''
-  if (r === s) return '上次搜索：' + r + ' 轮'
-  return '上次搜索：' + r + ' 轮 / ' + s + ' 次调用'
+  if (r === 0 || s === 0) return ''
+  return '搜索 ' + r + ' 轮·' + s + ' 次调用'
 }
 
 /**
