@@ -82,7 +82,9 @@ test('manual key file: tool + minimal prompt section are registered', async () =
     assert.equal(tools.length, 1)
     assert.equal(tools[0].name, 'context_search')
     assert.equal(typeof tools[0].execute, 'function')
-    assert.equal(tools[0].parameters.query.required, true)
+    assert.ok(Array.isArray(tools[0].parameters.required), "required must be an array")
+    assert.ok(tools[0].parameters.required.includes('query'), "query must be required")
+    assert.equal(tools[0].parameters.properties.query.type, 'string')
     assert.equal(tools[0].output.schema.type, 'string')
 
     assert.equal(sections.length, 1)
