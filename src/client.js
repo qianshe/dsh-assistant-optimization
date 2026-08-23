@@ -63,6 +63,12 @@ function apply(ctx) {
       function () { return React.createElement(TagsSetting); }
     );
   });
+  slots.inject("settings.general.item", function () {
+    return slots.register(
+      { name: "settings.general.item", id: "windsurf-key", order: 40 },
+      function () { return React.createElement(WindsurfKeySetting); }
+    );
+  });
 
   // 3. Prompt enhance button. Registered in conversation.input.right, which
   //    renders BEFORE the model select and context meter — the component only

@@ -160,7 +160,6 @@ function docFamily(rank) {
 function isOverlay(rank) {
   return rank === 1 || rank === 3
 }
-}
 
 /**
  * Reduce one instruction file to its structure signals: headings, plus the
