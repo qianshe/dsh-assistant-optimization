@@ -76,7 +76,7 @@ function searchSummary(rounds, searches) {
   var r = typeof rounds === 'number' ? rounds : 0
   var s = typeof searches === 'number' ? searches : 0
   if (r === 0 || s === 0) return ''
-  return '搜索 ' + r + ' 轮·' + s + ' 次调用'
+  return s + ' 调用 / ' + r + ' 搜索'
 }
 
 /**
