@@ -114,7 +114,7 @@ function requestEnhance(payload, signal) {
         err.refBytes = bag.refBytes
         throw err
       }
-      return { text: bag.text, refBytes: bag.refBytes }
+      return { text: bag.text, refBytes: bag.refBytes, rounds: bag.rounds, searches: bag.searches }
     })
   })
 }
