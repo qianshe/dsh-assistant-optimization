@@ -6,6 +6,13 @@ var _mermaidLoaded = null;
 var _mermaidSeq = 0;
 var _drag = { active: null };
 
+// Two FIXED canvases, picked by the diagram's orientation (never its size):
+//   wide  (W >= H) -> full slot width x CANVAS_WIDE_H
+//   tall  (W <  H) -> CANVAS_TALL_W x CANVAS_TALL_H, centered
+var CANVAS_WIDE_H = 240;
+var CANVAS_TALL_W = 320;
+var CANVAS_TALL_H = 360;
+
 function _ensureDragListeners() {
   if (_drag.listenersAdded) return;
   _drag.listenersAdded = true;
@@ -68,7 +75,7 @@ function _mountMermaid(el, svgHtml) {
   _ensureDragListeners();
   var container = document.createElement("div");
   container.className = "dsao-mermaid";
-  container.style.cssText = "position:relative;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;overflow:hidden;margin:8px 0";
+  container.style.cssText = "position:relative;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;overflow:hidden;margin:8px auto;display:block;cursor:grab;user-select:none;box-sizing:border-box";
 
   var toolbar = document.createElement("div");
   toolbar.style.cssText = "position:absolute;top:6px;right:6px;display:flex;gap:4px;z-index:10;background:var(--dsw-alias-bg-module-platform,rgba(255,255,255,0.92));border-radius:6px;padding:2px;box-shadow:0 1px 3px rgba(0,0,0,0.12)";
@@ -80,66 +87,62 @@ function _mountMermaid(el, svgHtml) {
     b.addEventListener("mouseleave", function () { b.style.background = "none"; });
     return b;
   }
-  var btnIn = mkBtn("\u2795", "Zoom In"), btnOut = mkBtn("\u2796", "Zoom Out"), btnReset = mkBtn("\u21BA", "Reset");
-  toolbar.appendChild(btnIn); toolbar.appendChild(btnOut); toolbar.appendChild(btnReset);
+  // Fixed canvas: wheel zooms, drag pans — only reset remains.
+  var btnReset = mkBtn("\u21BA", "Reset");
+  toolbar.appendChild(btnReset);
 
-  var viewport = document.createElement("div");
-  viewport.style.cssText = "overflow:auto;cursor:grab;user-select:none;display:flex;width:100%;min-height:150px;max-height:520px;box-sizing:border-box";
   var svgWrap = document.createElement("div");
-  svgWrap.style.cssText = "transform-origin:top left;display:inline-block;padding:12px;margin:auto;flex:0 0 auto;box-sizing:border-box";
+  svgWrap.style.cssText = "position:absolute;left:0;top:0;transform-origin:top left;display:block;padding:12px;box-sizing:border-box";
   svgWrap.innerHTML = svgHtml;
-  // Pin the SVG to its natural size (from the viewBox) so a wide diagram
-  // scrolls horizontally instead of being shrunk below legibility, and a tall
-  // one scrolls vertically inside the capped viewport instead of being
-  // clipped. Margin auto centers it when it fits and keeps the top-left
-  // reachable when it overflows.
+  // Pin the SVG to its natural size (from the viewBox); the fit below scales
+  // the wrap via transform, never the SVG layout.
   var svgEl = svgWrap.querySelector("svg");
+  var natW = 0, natH = 0;
   if (svgEl) {
     var vb = (svgEl.getAttribute("viewBox") || "").split(/\s+/);
-    if (vb.length === 4) {
-      var nw = parseFloat(vb[2]), nh = parseFloat(vb[3]);
-      if (isFinite(nw) && nw > 0) svgEl.style.width = nw + "px";
-      if (isFinite(nh) && nh > 0) svgEl.style.height = nh + "px";
-    }
+    if (vb.length === 4) { natW = parseFloat(vb[2]) || 0; natH = parseFloat(vb[3]) || 0; }
+    if (natW > 0) svgEl.style.width = natW + "px";
+    if (natH > 0) svgEl.style.height = natH + "px";
     svgEl.style.display = "block";
   }
-  viewport.appendChild(svgWrap); container.appendChild(toolbar); container.appendChild(viewport);
+  if (natW > 0) { svgWrap.style.width = (natW + 24) + "px"; svgWrap.style.height = (natH + 24) + "px"; }
+  container.appendChild(svgWrap); container.appendChild(toolbar);
 
-  // Natural layout size of the wrap (border box, at scale 1). The layout box is
-  // resized in apply() so the scrollable range always matches the SCALED visual
-  // size — zooming out never leaves a blank region, zooming in never strands
-  // content beyond the scroll edge.
-  var baseW = svgWrap.offsetWidth, baseH = svgWrap.offsetHeight;
-  if (!baseW || !baseH) {
-    var nb = (svgEl ? (svgEl.getAttribute("viewBox") || "").split(/\s+/) : []);
-    baseW = (nb.length === 4 ? parseFloat(nb[2]) : 0) + 24;
-    baseH = (nb.length === 4 ? parseFloat(nb[3]) : 0) + 24;
-  }
-  var scale = 1, tx = 0, ty = 0;
-  function apply() {
-    svgWrap.style.width = Math.max(1, baseW * scale) + "px";
-    svgWrap.style.height = Math.max(1, baseH * scale) + "px";
-    svgWrap.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + scale + ")";
-  }
-  function clampScale(s) { return Math.max(0.3, Math.min(5, s)); }
-  btnIn.addEventListener("click", function () { scale = clampScale(scale * 1.2); apply(); });
-  btnOut.addEventListener("click", function () { scale = clampScale(scale / 1.2); apply(); });
-  btnReset.addEventListener("click", function () { scale = 1; tx = 0; ty = 0; apply(); });
-
-  viewport.addEventListener("mousedown", function (e) {
-    var lastX = e.clientX, lastY = e.clientY;
-    _drag.active = { viewport: viewport, onMove: function (cx, cy) { tx += cx - lastX; ty += cy - lastY; lastX = cx; lastY = cy; apply(); } };
-    viewport.style.cursor = "grabbing"; e.preventDefault();
-  });
-  viewport.addEventListener("wheel", function (e) { e.preventDefault(); scale = clampScale(scale * (e.deltaY > 0 ? 0.9 : 1.1)); apply(); }, { passive: false });
-  var touchDrag = false, tX = 0, tY = 0;
-  viewport.addEventListener("touchstart", function (e) { if (e.touches.length === 1) { touchDrag = true; tX = e.touches[0].clientX; tY = e.touches[0].clientY; } }, { passive: true });
-  viewport.addEventListener("touchmove", function (e) { if (!touchDrag || e.touches.length !== 1) return; e.preventDefault(); tx += e.touches[0].clientX - tX; ty += e.touches[0].clientY - tY; tX = e.touches[0].clientX; tY = e.touches[0].clientY; apply(); }, { passive: false });
-  viewport.addEventListener("touchend", function () { touchDrag = false; });
-
-  apply();
+  var boxW = el.clientWidth || 600;
   var parent = el.parentElement;
   if (parent) parent.replaceChild(container, el);
+
+  // Fixed canvas picked by orientation: wide -> full slot width x 240;
+  // tall -> 320 x 360 centered. The diagram is contain-fitted inside.
+  var isWide = !(natW > 0 && natH > 0) || natW >= natH;
+  var canvasW = isWide ? boxW : Math.min(CANVAS_TALL_W, boxW);
+  var canvasH = isWide ? CANVAS_WIDE_H : CANVAS_TALL_H;
+  var pad = 24;
+  var fit = (natW > 0 && natH > 0) ? Math.min(canvasW / (natW + pad), canvasH / (natH + pad)) : 1;
+  container.style.width = canvasW + "px";
+  container.style.height = canvasH + "px";
+
+  var scale = fit, tx = 0, ty = 0;
+  function apply() {
+    var x = (canvasW - (natW + pad) * scale) / 2 + tx;
+    var y = (canvasH - (natH + pad) * scale) / 2 + ty;
+    svgWrap.style.transform = "translate(" + x + "px," + y + "px) scale(" + scale + ")";
+  }
+  function clampScale(s) { return Math.max(0.3, Math.min(5, s)); }
+  btnReset.addEventListener("click", function () { scale = fit; tx = 0; ty = 0; apply(); });
+
+  container.addEventListener("mousedown", function (e) {
+    var lastX = e.clientX, lastY = e.clientY;
+    _drag.active = { viewport: container, onMove: function (cx, cy) { tx += cx - lastX; ty += cy - lastY; lastX = cx; lastY = cy; apply(); } };
+    container.style.cursor = "grabbing"; e.preventDefault();
+  });
+  container.addEventListener("wheel", function (e) { e.preventDefault(); scale = clampScale(scale * (e.deltaY > 0 ? 0.9 : 1.1)); apply(); }, { passive: false });
+  var touchDrag = false, tX = 0, tY = 0;
+  container.addEventListener("touchstart", function (e) { if (e.touches.length === 1) { touchDrag = true; tX = e.touches[0].clientX; tY = e.touches[0].clientY; } }, { passive: true });
+  container.addEventListener("touchmove", function (e) { if (!touchDrag || e.touches.length !== 1) return; e.preventDefault(); tx += e.touches[0].clientX - tX; ty += e.touches[0].clientY - tY; tX = e.touches[0].clientX; tY = e.touches[0].clientY; apply(); }, { passive: false });
+  container.addEventListener("touchend", function () { touchDrag = false; });
+
+  apply();
 }
 
 function processMermaidBlocks(root) {
