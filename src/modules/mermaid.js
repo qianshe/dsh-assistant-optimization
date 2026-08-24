@@ -5,6 +5,8 @@
 var _mermaidLoaded = null;
 var _mermaidSeq = 0;
 var _drag = { active: null };
+var _mermaidLayouts = [];
+var _winResizeBound = false;
 
 // Two canvas shapes, picked by the diagram's orientation (never its size).
 // BOTH are always the full slot width; only the height differs, and the height
@@ -19,6 +21,16 @@ function _ensureDragListeners() {
   _drag.listenersAdded = true;
   document.addEventListener("mousemove", function (e) { if (!_drag.active) return; _drag.active.onMove(e.clientX, e.clientY); });
   document.addEventListener("mouseup", function () { if (_drag.active) { _drag.active.viewport.style.cursor = "grab"; _drag.active = null; } });
+}
+
+function _ensureWindowResizeListener() {
+  if (_winResizeBound || typeof window === "undefined") return;
+  _winResizeBound = true;
+  window.addEventListener("resize", function () {
+    for (var i = 0; i < _mermaidLayouts.length; i++) {
+      try { _mermaidLayouts[i](); } catch (e) {}
+    }
+  });
 }
 
 function loadMermaid() {
@@ -114,18 +126,20 @@ function _mountMermaid(el, svgHtml) {
   container.style.width = "100%";
   if (parent) parent.replaceChild(container, el);
 
-  // Canvas is always the full slot width; orientation only picks the height
-  // ratio. Width follows the slot via 100%; height is a fixed multiple of the
-  // measured slot width and is recomputed on slot resize.
+  // Canvas is always the full slot width. Orientation only selects the height
+  // ratio: wide boxes are flatter, tall boxes are taller. Width follows the
+  // slot via CSS 100%; height and contain-fit are recomputed on resize.
   var isWide = !(natW > 0 && natH > 0) || natW >= natH;
   var pad = 24;
   var canvasW = 0, canvasH = 0, fit = 1;
   var scale = 1, tx = 0, ty = 0;
+
   function apply() {
     var x = (canvasW - (natW + pad) * scale) / 2 + tx;
     var y = (canvasH - (natH + pad) * scale) / 2 + ty;
     svgWrap.style.transform = "translate(" + x + "px," + y + "px) scale(" + scale + ")";
   }
+
   function layout() {
     canvasW = container.clientWidth || boxW;
     canvasH = Math.round(canvasW * (isWide ? CANVAS_WIDE_RATIO : CANVAS_TALL_RATIO));
@@ -134,12 +148,15 @@ function _mountMermaid(el, svgHtml) {
     scale = fit; tx = 0; ty = 0;
     apply();
   }
+
   function clampScale(s) { return Math.max(0.3, Math.min(5, s)); }
   btnReset.addEventListener("click", function () { scale = fit; tx = 0; ty = 0; apply(); });
   layout();
-  // Track the SLOT (parent), not the container: the container width is 100%
-  // of the slot, so watching the slot catches every width change without the
-  // height mutation inside layout() re-triggering the observer.
+
+  // Keep the canvas tracking the slot. ResizeObserver handles direct slot
+  // width changes; window resize is the broader compatibility fallback.
+  _mermaidLayouts.push(layout);
+  _ensureWindowResizeListener();
   if (typeof ResizeObserver !== "undefined" && parent) {
     new ResizeObserver(function () { layout(); }).observe(parent);
   }
