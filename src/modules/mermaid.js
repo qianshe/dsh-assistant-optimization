@@ -111,26 +111,38 @@ function _mountMermaid(el, svgHtml) {
 
   var boxW = el.clientWidth || 600;
   var parent = el.parentElement;
+  container.style.width = "100%";
   if (parent) parent.replaceChild(container, el);
 
   // Canvas is always the full slot width; orientation only picks the height
-  // ratio. The diagram is contain-fitted and centered inside.
+  // ratio. Width follows the slot via 100%; height is a fixed multiple of the
+  // measured slot width and is recomputed on slot resize.
   var isWide = !(natW > 0 && natH > 0) || natW >= natH;
-  var canvasW = boxW;
-  var canvasH = Math.round(boxW * (isWide ? CANVAS_WIDE_RATIO : CANVAS_TALL_RATIO));
   var pad = 24;
-  var fit = (natW > 0 && natH > 0) ? Math.min(canvasW / (natW + pad), canvasH / (natH + pad)) : 1;
-  container.style.width = canvasW + "px";
-  container.style.height = canvasH + "px";
-
-  var scale = fit, tx = 0, ty = 0;
+  var canvasW = 0, canvasH = 0, fit = 1;
+  var scale = 1, tx = 0, ty = 0;
   function apply() {
     var x = (canvasW - (natW + pad) * scale) / 2 + tx;
     var y = (canvasH - (natH + pad) * scale) / 2 + ty;
     svgWrap.style.transform = "translate(" + x + "px," + y + "px) scale(" + scale + ")";
   }
+  function layout() {
+    canvasW = container.clientWidth || boxW;
+    canvasH = Math.round(canvasW * (isWide ? CANVAS_WIDE_RATIO : CANVAS_TALL_RATIO));
+    fit = (natW > 0 && natH > 0) ? Math.min(canvasW / (natW + pad), canvasH / (natH + pad)) : 1;
+    container.style.height = canvasH + "px";
+    scale = fit; tx = 0; ty = 0;
+    apply();
+  }
   function clampScale(s) { return Math.max(0.3, Math.min(5, s)); }
   btnReset.addEventListener("click", function () { scale = fit; tx = 0; ty = 0; apply(); });
+  layout();
+  // Track the SLOT (parent), not the container: the container width is 100%
+  // of the slot, so watching the slot catches every width change without the
+  // height mutation inside layout() re-triggering the observer.
+  if (typeof ResizeObserver !== "undefined" && parent) {
+    new ResizeObserver(function () { layout(); }).observe(parent);
+  }
 
   container.addEventListener("mousedown", function (e) {
     var lastX = e.clientX, lastY = e.clientY;
