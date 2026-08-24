@@ -1,6 +1,7 @@
-// Verify budget-limited content embedding and the new result format:
-// explicit file list + per-file limited code, no keyword/config lines,
-// and every failure mode degrades to a marker instead of an error.
+// Verify the two-section result format (file list first, content after)
+// and the budget-limited embedding: ranges ship completely (no per-range
+// line cap), byte budgets truncate from the tail with a marker, and every
+// failure mode degrades to a marker instead of an error.
 // Run: node --test test/content-embed.test.mjs
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -11,7 +12,7 @@ import { dirname, join } from 'node:path'
 import { formatSearchResult, resolveContentBudgets } from '../lib/fast-context/content-embed.js'
 
 /** Deterministic budgets (bypass the env-var resolution). */
-const BUDGETS = { totalMaxBytes: 12288, fileMaxBytes: 3072, rangeMaxLines: 120, lineMaxChars: 400 }
+const BUDGETS = { totalMaxBytes: 49152, fileMaxBytes: 16384, lineMaxChars: 400 }
 
 function withTempDir(run) {
   const dir = mkdtempSync(join(tmpdir(), 'dsao-fc-content-'))
@@ -26,7 +27,7 @@ function makeFile(dir, name, count, makeLine = (i) => `line ${i} content`) {
   return path
 }
 
-test('explicit file list with embedded code; no keyword or config lines', () => {
+test('two independent sections: complete file list first, content after', () => {
   return withTempDir((dir) => {
     const a = makeFile(dir, 'src/a.ts', 10)
     const b = makeFile(dir, 'src/b.py', 10)
@@ -39,36 +40,52 @@ test('explicit file list with embedded code; no keyword or config lines', () => 
     )
 
     assert.ok(out.startsWith('Found 2 relevant files.'))
-    assert.ok(out.includes(`  [1/2] ${a} (L1-10)`))
-    assert.ok(out.includes(`  [2/2] ${b} (L5-8)`))
-    assert.ok(out.includes('```ts\n'))
-    assert.ok(out.includes('```python\n'))
-    assert.ok(out.includes('1: '))
-    assert.ok(out.includes('5: '))
+    const listIdx = out.indexOf('Files:')
+    const contentIdx = out.indexOf('Contents:')
+    assert.ok(listIdx > -1, 'the list section header is present')
+    assert.ok(contentIdx > -1, 'the content section header is present')
+    assert.ok(listIdx < contentIdx, 'the list section comes before the content section')
+
+    // The list section is code-free and complete.
+    const listSection = out.slice(listIdx, contentIdx)
+    assert.ok(!listSection.includes('```'), 'the list section carries no code fences')
+    assert.ok(listSection.includes(`  [1/2] ${a} (L1-10)`))
+    assert.ok(listSection.includes(`  [2/2] ${b} (L5-8)`))
+
+    // The content section carries the code, in list order, with no config noise.
+    const contentSection = out.slice(contentIdx)
+    assert.ok(contentSection.includes('```ts\n'))
+    assert.ok(contentSection.includes('```python\n'))
+    assert.ok(contentSection.includes('1: '))
+    assert.ok(contentSection.includes('5: '))
     assert.ok(!out.includes('grep keywords'))
     assert.ok(!out.includes('[config]'))
   })
 })
 
-test('embeds real file content under the budgets', () => {
-  return withTempDir((dir) => {
-    const path = makeFile(dir, 'src/a.ts', 10, (i) => `export const v${i} = ${i}`)
-    const out = formatSearchResult([{ full_path: path, ranges: [[1, 10]] }], { budgets: BUDGETS })
-
-    assert.ok(out.includes('1: export const v1 = 1'))
-    assert.ok(out.includes('10: export const v10 = 10'))
-    assert.ok(!out.includes('omitted'))
-  })
-})
-
-test('per-range line cap truncates long ranges with a marker', () => {
+test('a range is embedded completely — no per-range line cap', () => {
   return withTempDir((dir) => {
     const path = makeFile(dir, 'big.ts', 300)
     const out = formatSearchResult([{ full_path: path, ranges: [[1, 300]] }], { budgets: BUDGETS })
 
-    assert.ok(out.includes('120: line 120 content'))
-    assert.ok(!out.includes('121: line 121'))
-    assert.ok(out.includes('(L121-300 omitted; use read for the rest)'))
+    assert.ok(out.includes('1: line 1 content'))
+    assert.ok(out.includes('300: line 300 content'), 'the last line of the range is present')
+    assert.ok(!out.includes('omitted'), 'a range that fits the byte budgets ships without a marker')
+  })
+})
+
+test('a range exceeding the byte budgets is truncated from the tail with a marker', () => {
+  return withTempDir((dir) => {
+    const path = makeFile(dir, 'big.ts', 300)
+    const tight = { totalMaxBytes: 4096, fileMaxBytes: 2048, lineMaxChars: 400 }
+    const out = formatSearchResult([{ full_path: path, ranges: [[1, 300]] }], { budgets: tight })
+
+    assert.ok(out.includes('1: line 1 content'))
+    const m = out.match(/\(L(\d+)-300 omitted: content budget; use read for the rest\)/)
+    assert.ok(m, 'the tail-omission marker is present')
+    // The marker starts exactly where the embedded lines end.
+    const lastEmbedded = out.split('\n').filter((l) => /^\d+: line \d+ content$/.test(l)).pop()
+    assert.equal(Number(m[1]), Number(lastEmbedded.split(':')[0]) + 1)
   })
 })
 
@@ -77,9 +94,7 @@ test('total budget exhaustion marks later files, never throws', () => {
     const a = makeFile(dir, 'a.ts', 200)
     const b = makeFile(dir, 'b.ts', 200)
     const c = makeFile(dir, 'c.ts', 200)
-    // Tight budgets: file cap 1024B, total cap 2048B → the third file must
-    // land on a budget marker.
-    const tight = { totalMaxBytes: 2048, fileMaxBytes: 1024, rangeMaxLines: 120, lineMaxChars: 400 }
+    const tight = { totalMaxBytes: 2048, fileMaxBytes: 1024, lineMaxChars: 400 }
     const out = formatSearchResult(
       [
         { full_path: a, ranges: [[1, 200]] },
@@ -89,11 +104,12 @@ test('total budget exhaustion marks later files, never throws', () => {
       { budgets: tight },
     )
 
-    assert.ok(out.includes('  [3/3] '))
     assert.ok(out.includes('(content omitted: budget exhausted; use read L1-200)'))
-    // The marker belongs to file 3: no code fence follows its header line.
-    const idx = out.indexOf('  [3/3] ')
-    assert.ok(!out.slice(idx).includes('```ts\n1: '))
+    // The marker belongs to file 3: nothing after its content-section header
+    // ships a code fence.
+    const afterContents = out.slice(out.indexOf('Contents:'))
+    const c3 = afterContents.indexOf('  [3/3] ')
+    assert.ok(!afterContents.slice(c3).includes('```ts\n'))
   })
 })
 
@@ -113,6 +129,9 @@ test('a missing file degrades to a marker, not an error', () => {
     { budgets: BUDGETS },
   )
   assert.ok(out.includes('(content unavailable: file no longer exists)'))
+  // The list section still carries the entry.
+  assert.ok(out.includes('Files:'))
+  assert.ok(out.includes('C:/nowhere/gone.ts'))
 })
 
 test('a binary file is skipped with a marker', () => {
@@ -132,16 +151,17 @@ test('an out-of-bounds range is reported as such', () => {
   })
 })
 
-test('include_content=false yields a path+range list only', () => {
+test('include_content=false yields only the file list section', () => {
   const files = [{ full_path: 'C:/proj/src/a.ts', ranges: [[1, 10], [50, 60]] }]
   const out = formatSearchResult(files, { includeContent: false, budgets: BUDGETS })
 
+  assert.ok(out.includes('Files:'))
   assert.ok(out.includes('  [1/1] C:/proj/src/a.ts (L1-10, L50-60)'))
-  assert.ok(!out.includes('```'))
-  assert.ok(!out.includes('omitted'))
+  assert.ok(!out.includes('Contents:'), 'no content section')
+  assert.ok(!out.includes('```'), 'no code fences')
 })
 
-test('a salvaged file without ranges gets a preview', () => {
+test('a salvaged file without ranges gets a preview in the content section', () => {
   return withTempDir((dir) => {
     const path = makeFile(dir, 'salvaged.ts', 100)
     const out = formatSearchResult([{ full_path: path, ranges: [] }], { budgets: BUDGETS })
@@ -159,21 +179,21 @@ test('an empty file list says so plainly', () => {
 
 test('resolveContentBudgets clamps env values to sane bounds', () => {
   const saved = {}
-  const names = ['FC_CONTENT_MAX_BYTES', 'FC_CONTENT_FILE_MAX_BYTES', 'FC_CONTENT_MAX_LINES_PER_RANGE', 'FC_CONTENT_LINE_MAX_CHARS']
+  const names = ['FC_CONTENT_MAX_BYTES', 'FC_CONTENT_FILE_MAX_BYTES', 'FC_CONTENT_LINE_MAX_CHARS']
   for (const n of names) saved[n] = process.env[n]
   try {
     for (const n of names) delete process.env[n]
     const defaults = resolveContentBudgets()
-    assert.equal(defaults.totalMaxBytes, 12288)
-    assert.equal(defaults.fileMaxBytes, 3072)
-    assert.equal(defaults.rangeMaxLines, 120)
+    assert.equal(defaults.totalMaxBytes, 49152)
+    assert.equal(defaults.fileMaxBytes, 16384)
     assert.equal(defaults.lineMaxChars, 400)
+    assert.equal('rangeMaxLines' in defaults, false, 'the per-range line cap is gone')
 
     process.env.FC_CONTENT_MAX_BYTES = '10' // below min → clamped to 1024
-    process.env.FC_CONTENT_MAX_LINES_PER_RANGE = '99999' // above max → 500
+    process.env.FC_CONTENT_FILE_MAX_BYTES = '999999' // above max → 131072
     const clamped = resolveContentBudgets()
     assert.equal(clamped.totalMaxBytes, 1024)
-    assert.equal(clamped.rangeMaxLines, 500)
+    assert.equal(clamped.fileMaxBytes, 131072)
   } finally {
     for (const [n, v] of Object.entries(saved)) {
       if (v === undefined) delete process.env[n]

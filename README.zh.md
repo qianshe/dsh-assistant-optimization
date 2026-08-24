@@ -45,7 +45,7 @@ Write、Edit 行在文件路径后带上 `+N`（新增） / `-N`（删除）徽�
 
 ### 语义搜索（`context_search`）
 
-面向**模糊或不清晰**搜索的宿主端工具：知道某个功能"做什么"、但不知道落在哪些文件或符号上时，传一句自然语言描述，即可拿到**显式文件列表 + 每个文件行范围内的代码**（预算内，超出部分用 read 补）。内部跑一个 agentic 搜索循环（repo map → ripgrep/read/tree 受限命令 → 回答），基于 fast-context 思路、由 Windsurf key 驱动。返回内容就是上下文本身——没有 grep keywords、没有 config 行；`include_content: false` 可退化为纯路径+行范围列表。
+面向**模糊或不清晰**搜索的宿主端工具：知道某个功能"做什么"、但不知道落在哪些文件或符号上时，传一句自然语言描述，即可拿到**两段式结果——先是完整的文件列表（每文件带行范围），然后是每个文件该行范围内的完整代码**（两级字节预算内，超出部分用 read 补；列表与详情分成两个独立部分，不交替穿插）。内部跑一个 agentic 搜索循环（repo map → ripgrep/read/tree 受限命令 → 回答），基于 fast-context 思路、由 Windsurf key 驱动。返回内容就是上下文本身——没有 grep keywords、没有 config 行；`include_content: false` 可退化为纯文件列表。
 
 **key 门控——核心设计。** 工具与其一句提示词引导**只在能解析到 Windsurf key 时才注册**。没有 key 时两者都不注册，模型因此永远不会被告知一个它调不了的工具。注入的引导刻意只有两句话（用途 + 何时该用它 + 最小调用形态），无背景、无示例——因为这段文字在每一轮都要付成本。
 
@@ -88,7 +88,7 @@ dsh web
 - **推理折叠**包装助手消息渲染器，把 `text` 块按配置标记拆成交替的 `reasoning` + `text` 块，其余交还 DSH。
 - **编辑 Diff 数值**包装文件改动工具行，基于 DSH 自己的 diff 模型注入 `+N/-N` 徽标；出错的编辑没有徽标。
 - **Prompt 增强**在输入框锚定一个按钮，暴露一条仅限 loopback 的路由（`POST /api/dsao/prompt-enhance`），用当前模型结合草稿和项目/会话上下文（作为私有参考）做一次调用，结果经正常输入路径写回，所以撤销依然可用。
-- **语义搜索**注册一个宿主端工具（`context_search`）加一句提示词段，**且两者都只在能解析到 Windsurf key 时**（环境变量 → 手动文件 → 本地自动读取）才注册。工具在 `lib/fast-context/` 内跑 agentic 循环（repo map → ripgrep/read/tree 受限命令 → 回答）；当 Windsurf 侧中途失败时，自动降级到本地部署模型。结果格式化在 `content-embed.js`：按答案行范围从磁盘重读代码（三级预算：总量 / 每文件 / 每 range 行数，env 可调），拼在显式文件列表之后；文件缺失、二进制、预算耗尽都退化为 marker 行，绝不使搜索本身失败。prompt-enhance 路由对该工具钉死 `include_content: false`（其改写策略不允许把代码带进 prompt）。
+- **语义搜索**注册一个宿主端工具（`context_search`）加一句提示词段，**且两者都只在能解析到 Windsurf key 时**（环境变量 → 手动文件 → 本地自动读取）才注册。工具在 `lib/fast-context/` 内跑 agentic 循环（repo map → ripgrep/read/tree 受限命令 → 回答）；当 Windsurf 侧中途失败时，自动降级到本地部署模型。结果格式化在 `content-embed.js`：输出分两个独立部分——先完整文件列表（每文件带行范围），后各文件行范围内的完整代码（无行级硬上限，两级字节预算：总量 / 每文件，env 可调；预算截断时尾部出 marker 提示用 read 补）。格式化时从磁盘重读，缓存命中也是新鲜内容；文件缺失、二进制、预算耗尽都退化为 marker 行，绝不使搜索本身失败。prompt-enhance 路由对该工具钉死 `include_content: false`（其改写策略不允许把代码带进 prompt）。
 
 slot key、优先级、参考提取契约与失败状态码映射见 [`docs/technical-reference.md`](./docs/technical-reference.md)。
 
