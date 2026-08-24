@@ -11,9 +11,9 @@ var _winResizeBound = false;
 // Two canvas shapes, picked by the diagram's orientation (never its size).
 // BOTH are always the full slot width; only the height differs, and the height
 // is a fixed multiple of that width:
-//   wide (W >= H) -> width x width * 0.6   (landscape box)
+//   wide (W >= H) -> width x width * 0.75  (landscape box)
 //   tall (W <  H) -> width x width * 1.2   (portrait box, height > width)
-var CANVAS_WIDE_RATIO = 0.6;
+var CANVAS_WIDE_RATIO = 0.75;
 var CANVAS_TALL_RATIO = 1.2;
 
 function _ensureDragListeners() {
