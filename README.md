@@ -45,7 +45,7 @@ While running it shows a spinning arc and "增强中"; on success a green check;
 
 ### Semantic search (`context_search`)
 
-A host-side tool for **vague or unclear** searches: when you know what a feature does but not which files or symbols implement it, pass a natural-language query and get back candidate files with line ranges plus suggested grep keywords. It runs an agentic search loop (repo map → ripgrep/read/tree → answer), built on the fast-context approach and driven by a Windsurf key.
+A host-side tool for **vague or unclear** searches: when you know what a feature does but not which files or symbols implement it, pass a natural-language query and get back an **explicit file list with the code of each file's line ranges** (under a content budget — use `read` for anything beyond). It runs an agentic search loop (repo map → ripgrep/read/tree → answer), built on the fast-context approach and driven by a Windsurf key. The result is the context itself: no keyword or config lines; `include_content: false` degrades it to a path+range list.
 
 **Key gating — the whole point.** The tool and its one-line prompt guidance are registered *only* when a Windsurf key resolves. With no key, nothing is registered, so the model is never told about a tool it cannot call. The injected guidance is deliberately two sentences (purpose + when to reach for it + minimal call shape) — no background, no examples — because that text is paid for on every turn.
 
@@ -88,7 +88,7 @@ Each capability shadows a DSH rendering slot and delegates back to the official 
 - **Reasoning fold** wraps the assistant message renderer, splits `text` blocks at the configured markers into alternating `reasoning` + `text` blocks, and hands the rest back to DSH.
 - **Edit diff counts** wraps the file-mutation tool row and injects a `+N/-N` badge derived from DSH's own diff model; errored edits get no badge.
 - **Prompt enhance** anchors a button in the composer and exposes one loopback-only route (`POST /api/dsao/prompt-enhance`) that calls the currently selected model with the draft plus project/session context as private reference, then writes the result back through the normal input path so undo still works.
-- **Semantic search** registers a host-side tool (`context_search`) plus a two-sentence prompt section, **both only when a Windsurf key resolves** (env → manual file → local auto-read). The tool runs the agentic loop in `lib/fast-context/` (repo map → restricted commands over ripgrep/read/tree → answer); the local deployment model is the automatic fallback when the Windsurf side fails mid-search.
+- **Semantic search** registers a host-side tool (`context_search`) plus a two-sentence prompt section, **both only when a Windsurf key resolves** (env → manual file → local auto-read). The tool runs the agentic loop in `lib/fast-context/` (repo map → restricted commands over ripgrep/read/tree → answer); the local deployment model is the automatic fallback when the Windsurf side fails mid-search. Result formatting lives in `content-embed.js`: the answer's line ranges are re-read from disk (three budgets — total / per-file / per-range lines, env-tunable) and appended after the explicit file list; a missing file, a binary file, or an exhausted budget degrades to a marker line and never fails the search. The prompt-enhance route pins `include_content: false` for this tool (its rewrite policy must not carry code into the prompt).
 
 For slot keys, priorities, the exact reference-extraction contract, and the failure-status map, see [`docs/technical-reference.md`](./docs/technical-reference.md).
 
@@ -107,6 +107,7 @@ For slot keys, priorities, the exact reference-extraction contract, and the fail
 │       ├── brain-llm.js   # local deployment model (brain B)
 │       ├── executor.js    # restricted commands (rg/readfile/tree/ls/glob)
 │       ├── extract-key.js # local state.vscdb key read (node:sqlite)
+│       ├── content-embed.js # result formatting: file list + budget-limited code
 │       └── …              # protocol / path-safety / repair / cache / shared
 ├── package.json       # dsh.bundle + dsh.client metadata
 ├── src/               # module sources (development reference)
@@ -129,7 +130,8 @@ For slot keys, priorities, the exact reference-extraction contract, and the fail
 │   ├── context.test.mjs
 │   ├── prompt-enhance.test.mjs
 │   ├── host-prompt-enhance.test.mjs
-│   └── fast-context-gate.test.mjs
+│   ├── fast-context-gate.test.mjs
+│   └── content-embed.test.mjs
 └── docs/
     ├── design.md
     └── technical-reference.md  # DSH slot & tool-call rendering reference
@@ -146,6 +148,7 @@ node test/context.test.mjs             # reference extraction + exclusions
 node test/prompt-enhance.test.mjs      # button placement + cleanup
 node test/host-prompt-enhance.test.mjs # inject contract, route guards, model call
 node test/fast-context-gate.test.mjs   # key gate: no key ⇒ no tool, no prompt
+node test/content-embed.test.mjs       # result formatting: budgeted embed, marker fallbacks
 node --check lib/client.js             # bundle syntax
 ```
 

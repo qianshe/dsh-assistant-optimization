@@ -467,6 +467,7 @@ const defaultModel = { currentSelection: () => selection }
   assert.equal(executed[0].callId, 'call_1', 'the provider call id correlates the result')
   assert.equal(executed[0].arguments.query, 'badge colour', 'model arguments arrive parsed')
   assert.equal(executed[0].arguments.project_path, 'D:/proj/dsao', 'the search is pinned to the session cwd')
+  assert.equal(executed[0].arguments.include_content, false, 'the enhancer route never accepts search content')
 
   const msgs = captured[1].messages
   assert.equal(msgs.length, 3, 'pass 2 sees draft + assistant call + tool result')
@@ -560,8 +561,9 @@ const defaultModel = { currentSelection: () => selection }
   assert.equal(second.tools, undefined, 'the retry is tool-free')
 }
 
-// 23. Malformed tool arguments degrade to an empty object (plus the cwd pin);
-//     the round completes and the final rewrite is still delivered.
+// 23. Malformed tool arguments degrade to an empty object (plus the cwd and
+//     no-content pins); the round completes and the final rewrite is still
+//     delivered.
 {
   let argsSeen
   const tools = {
@@ -586,7 +588,7 @@ const defaultModel = { currentSelection: () => selection }
   const res = await call(route, { body: { text: 'hi', cwd: 'D:/p' } })
   assert.equal(res.status, 200)
   assert.equal(res.body.text, 'done')
-  assert.deepEqual(argsSeen, { project_path: 'D:/p' }, 'bad arguments degrade to the cwd pin alone')
+  assert.deepEqual(argsSeen, { include_content: false, project_path: 'D:/p' }, 'bad arguments degrade to the pins alone')
 }
 
 // 24. A first hit that is not enough gets a refined second round: the tool
