@@ -6,12 +6,13 @@ var _mermaidLoaded = null;
 var _mermaidSeq = 0;
 var _drag = { active: null };
 
-// Two FIXED canvases, picked by the diagram's orientation (never its size):
-//   wide  (W >= H) -> full slot width x CANVAS_WIDE_H
-//   tall  (W <  H) -> CANVAS_TALL_W x CANVAS_TALL_H, centered
-var CANVAS_WIDE_H = 240;
-var CANVAS_TALL_W = 320;
-var CANVAS_TALL_H = 360;
+// Two canvas shapes, picked by the diagram's orientation (never its size).
+// BOTH are always the full slot width; only the height differs, and the height
+// is a fixed multiple of that width:
+//   wide (W >= H) -> width x width * 0.6   (landscape box)
+//   tall (W <  H) -> width x width * 1.2   (portrait box, height > width)
+var CANVAS_WIDE_RATIO = 0.6;
+var CANVAS_TALL_RATIO = 1.2;
 
 function _ensureDragListeners() {
   if (_drag.listenersAdded) return;
@@ -112,11 +113,11 @@ function _mountMermaid(el, svgHtml) {
   var parent = el.parentElement;
   if (parent) parent.replaceChild(container, el);
 
-  // Fixed canvas picked by orientation: wide -> full slot width x 240;
-  // tall -> 320 x 360 centered. The diagram is contain-fitted inside.
+  // Canvas is always the full slot width; orientation only picks the height
+  // ratio. The diagram is contain-fitted and centered inside.
   var isWide = !(natW > 0 && natH > 0) || natW >= natH;
-  var canvasW = isWide ? boxW : Math.min(CANVAS_TALL_W, boxW);
-  var canvasH = isWide ? CANVAS_WIDE_H : CANVAS_TALL_H;
+  var canvasW = boxW;
+  var canvasH = Math.round(boxW * (isWide ? CANVAS_WIDE_RATIO : CANVAS_TALL_RATIO));
   var pad = 24;
   var fit = (natW > 0 && natH > 0) ? Math.min(canvasW / (natW + pad), canvasH / (natH + pad)) : 1;
   container.style.width = canvasW + "px";
