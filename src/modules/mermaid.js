@@ -17,7 +17,7 @@ function loadMermaid() {
   if (_mermaidLoaded) return _mermaidLoaded;
   if (typeof window === "undefined" || !window.document) return Promise.resolve(null);
   if (window.mermaid) {
-    window.mermaid.initialize({ startOnLoad: false, theme: "default", securityLevel: "loose" });
+    window.mermaid.initialize({ startOnLoad: false, theme: "default", securityLevel: "loose", flowchart: { useMaxWidth: false } });
     _mermaidLoaded = Promise.resolve(window.mermaid);
     return _mermaidLoaded;
   }
@@ -26,7 +26,7 @@ function loadMermaid() {
     s.src = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js";
     s.onload = function () {
       if (window.mermaid) {
-        window.mermaid.initialize({ startOnLoad: false, theme: "default", securityLevel: "loose" });
+        window.mermaid.initialize({ startOnLoad: false, theme: "default", securityLevel: "loose", flowchart: { useMaxWidth: false } });
         resolve(window.mermaid);
       } else { _mermaidLoaded = null; resolve(null); }
     };
@@ -84,14 +84,43 @@ function _mountMermaid(el, svgHtml) {
   toolbar.appendChild(btnIn); toolbar.appendChild(btnOut); toolbar.appendChild(btnReset);
 
   var viewport = document.createElement("div");
-  viewport.style.cssText = "overflow:hidden;cursor:grab;user-select:none;display:flex;align-items:center;justify-content:center;min-height:80px;max-height:500px";
+  viewport.style.cssText = "overflow:auto;cursor:grab;user-select:none;display:flex;width:100%;min-height:150px;max-height:520px;box-sizing:border-box";
   var svgWrap = document.createElement("div");
-  svgWrap.style.cssText = "transform-origin:center center;display:inline-block;padding:12px";
+  svgWrap.style.cssText = "transform-origin:top left;display:inline-block;padding:12px;margin:auto;flex:0 0 auto;box-sizing:border-box";
   svgWrap.innerHTML = svgHtml;
+  // Pin the SVG to its natural size (from the viewBox) so a wide diagram
+  // scrolls horizontally instead of being shrunk below legibility, and a tall
+  // one scrolls vertically inside the capped viewport instead of being
+  // clipped. Margin auto centers it when it fits and keeps the top-left
+  // reachable when it overflows.
+  var svgEl = svgWrap.querySelector("svg");
+  if (svgEl) {
+    var vb = (svgEl.getAttribute("viewBox") || "").split(/\s+/);
+    if (vb.length === 4) {
+      var nw = parseFloat(vb[2]), nh = parseFloat(vb[3]);
+      if (isFinite(nw) && nw > 0) svgEl.style.width = nw + "px";
+      if (isFinite(nh) && nh > 0) svgEl.style.height = nh + "px";
+    }
+    svgEl.style.display = "block";
+  }
   viewport.appendChild(svgWrap); container.appendChild(toolbar); container.appendChild(viewport);
 
+  // Natural layout size of the wrap (border box, at scale 1). The layout box is
+  // resized in apply() so the scrollable range always matches the SCALED visual
+  // size — zooming out never leaves a blank region, zooming in never strands
+  // content beyond the scroll edge.
+  var baseW = svgWrap.offsetWidth, baseH = svgWrap.offsetHeight;
+  if (!baseW || !baseH) {
+    var nb = (svgEl ? (svgEl.getAttribute("viewBox") || "").split(/\s+/) : []);
+    baseW = (nb.length === 4 ? parseFloat(nb[2]) : 0) + 24;
+    baseH = (nb.length === 4 ? parseFloat(nb[3]) : 0) + 24;
+  }
   var scale = 1, tx = 0, ty = 0;
-  function apply() { svgWrap.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + scale + ")"; }
+  function apply() {
+    svgWrap.style.width = Math.max(1, baseW * scale) + "px";
+    svgWrap.style.height = Math.max(1, baseH * scale) + "px";
+    svgWrap.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + scale + ")";
+  }
   function clampScale(s) { return Math.max(0.3, Math.min(5, s)); }
   btnIn.addEventListener("click", function () { scale = clampScale(scale * 1.2); apply(); });
   btnOut.addEventListener("click", function () { scale = clampScale(scale / 1.2); apply(); });
