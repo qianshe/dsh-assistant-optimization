@@ -481,6 +481,34 @@ function manageLatestGroup(groups) {
       header.getAttribute('data-dsao-tg-header') !== '') return;
 
   var running = isGroupRunning(latestGroup);
+  var autoState = header.getAttribute('data-dsao-tg-auto') || 'collapsed';
+
+  // Diagnostic logging
+  var lastItem = latestGroup[latestGroup.length - 1];
+  var nextRaw = lastItem.nextElementSibling;
+  console.log('[dsao-tg] manageLatest: groupSize=' + latestGroup.length +
+    ' running=' + running + ' autoState=' + autoState +
+    ' state=' + header.getAttribute('data-dsao-tg-state'));
+  if (nextRaw) {
+    console.log('[dsao-tg] nextSibling: kind=' + (nextRaw.getAttribute && nextRaw.getAttribute('data-chat-flow-kind') || '?') +
+      ' offsetH=' + nextRaw.offsetHeight +
+      ' textLen=' + (nextRaw.textContent ? nextRaw.textContent.trim().length : -1) +
+      ' isTransparent=' + isTransparentNode(nextRaw) +
+      ' isGroupable=' + (nextRaw.getAttribute && nextRaw.getAttribute('data-chat-flow-kind') === 'tool-call' ? isGroupableTool(nextRaw) : 'n/a'));
+    // Walk all siblings after the group
+    var walk = nextRaw;
+    var idx = 0;
+    while (walk) {
+      console.log('[dsao-tg]   sibling[' + idx + ']: kind=' + (walk.getAttribute && walk.getAttribute('data-chat-flow-kind') || '?') +
+        ' offsetH=' + walk.offsetHeight + ' textLen=' + (walk.textContent ? walk.textContent.trim().length : -1) +
+        ' transparent=' + isTransparentNode(walk));
+      walk = walk.nextElementSibling;
+      idx++;
+      if (idx > 5) break;
+    }
+  } else {
+    console.log('[dsao-tg] nextSibling: null');
+  }
 
   if (running) {
     // Rule 1: keep expanded while any tool is running
