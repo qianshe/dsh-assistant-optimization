@@ -12,6 +12,7 @@
 //   markers.js        — localStorage marker CRUD
 //   text-split.js     — splitText + transformBlocks
 //   tool-diff.js      — file-edit diff line count badges (ensureBadge 幂等注入)
+//   tool-group.js     — collapse consecutive tool-call rows into a group
 //   wrapper.js        — WrappedAssistantStep / WrappedToolCallRow + official renderer finders
 //   context.js        — private-reference extraction (project / instructions / summary / history)
 //   prompt-enhance.js — composer button + placement
@@ -83,4 +84,7 @@ function apply(ctx) {
 
   // 4. Mermaid post-processor
   ctx.effect(function () { return startMermaidObserver(); });
+
+  // 5. Tool-call grouping: collapse consecutive tool-call rows into a group
+  ctx.effect(function () { return startToolGroupObserver(); });
 }
