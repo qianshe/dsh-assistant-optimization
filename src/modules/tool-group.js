@@ -488,9 +488,13 @@ function manageLatestGroup(groups) {
   var autoState = header.getAttribute('data-dsao-tg-auto') || 'collapsed';
 
   if (autoState === 'running') {
-    // Transition: was running, now all done → mark as waiting
+    // Transition: was running, now all done → mark as waiting.
+    // Return WITHOUT checking hasContentAfterGroup this scan — the next
+    // scan (triggered by genuinely new content arriving) will evaluate it.
+    // This prevents premature collapse when DOM mutations from the tool
+    // finishing and new content arriving arrive in the same batch.
     header.setAttribute('data-dsao-tg-auto', 'done');
-    autoState = 'done';
+    return;
   }
 
   if (autoState === 'done' && hasContentAfterGroup(latestGroup)) {
