@@ -416,12 +416,14 @@ function applyGroup(group) {
     // So we walk forward from the header at toggle time to find current items.
     header.addEventListener('click', function (e) {
       e.stopPropagation();
+      header.setAttribute('data-dsao-tg-user', '');
       var liveGroup = collectGroupFromHeader(header);
       if (liveGroup.length >= 2) toggleGroup(header, liveGroup);
     });
     header.addEventListener('keydown', function (e) {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault(); e.stopPropagation();
+        header.setAttribute('data-dsao-tg-user', '');
         var liveGroup = collectGroupFromHeader(header);
         if (liveGroup.length >= 2) toggleGroup(header, liveGroup);
       }
@@ -499,10 +501,12 @@ function hasContentAfterGroup(group) {
  * Purely condition-driven — no state machine, no lifecycle tracking.
  *
  * Rules:
- * 1. Any tool running → expand.
- * 2. All tools done + non-groupable content after group → collapse.
- * 3. Otherwise → leave as-is (respect manual toggle / initial state).
- * 4. Older groups are never touched here.
+ * 1. User manually toggled → respect their choice (skip auto-management).
+ * 2. Any tool running → expand.
+ * 3. All tools done + non-groupable content after group → collapse.
+ * 4. Otherwise → leave as-is.
+ * 5. Older groups are never touched here.
+ * 6. User flag cleared on header rebuild (new tools → resume auto-management).
  */
 function manageLatestGroup(groups) {
   if (!groups || groups.length === 0) return;
@@ -511,6 +515,10 @@ function manageLatestGroup(groups) {
   var header = first.previousElementSibling;
   if (!header || !header.getAttribute ||
       header.getAttribute('data-dsao-tg-header') !== '') return;
+
+  // User has manually toggled this group → respect their choice.
+  // The flag is set on click/keydown and cleared on header rebuild (new tools).
+  if (header.getAttribute('data-dsao-tg-user') === '') return;
 
   if (isGroupRunning(latestGroup)) {
     if (header.getAttribute('data-dsao-tg-state') === 'collapsed') {
