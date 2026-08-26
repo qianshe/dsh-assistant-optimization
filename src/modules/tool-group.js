@@ -378,9 +378,15 @@ function unmarkGroupItem(el) {
  * Apply grouping to one group of consecutive tool-call items.
  * Idempotent: if the header already exists and group size matches, update in place.
  *
- * Initial state: if any tool is running, start expanded; otherwise collapsed.
- * The auto-manage logic in manageLatestGroup() handles subsequent transitions
- * for the latest group only.
+ * Creation state:
+ * - First creation: collapsed unless the group is running — page refresh
+ *   therefore defaults to collapsed (user requirement).
+ * - Rebuild (group grew through a transparent gap): explicit signal
+ *   evaluation — expand while running OR while no out-of-group render
+ *   signal follows; collapse when the signal is already present. A rebuild
+ *   therefore never force-expands a group that should stay collapsed.
+ * The auto-manage logic in manageLatestGroup() handles subsequent
+ * transitions for the latest group only.
  */
 function applyGroup(group) {
   var first = group[0];
@@ -429,12 +435,17 @@ function applyGroup(group) {
       }
     });
 
-    // Initial state:
-    // - Rebuild (size changed): always expand — manageLatestGroup will
-    //   collapse if needed. Avoids flicker from momentary all-done window.
-    // - First creation: expand if running, collapse if not (historical groups
-    //   default collapsed on page refresh per user requirement).
-    var shouldExpand = isRebuild || isGroupRunning(group);
+    // Creation state:
+    // - First creation: collapsed unless the group is running — page refresh
+    //   therefore defaults to collapsed (user requirement).
+    // - Rebuild (group grew through a transparent gap): explicit signal
+    //   evaluation — expand while running OR while no out-of-group render
+    //   signal follows; collapse when the signal is already present. A
+    //   rebuild therefore never force-expands a group that should stay
+    //   collapsed (kills the collapse→reopen bounce).
+    var shouldExpand = isRebuild
+      ? (isGroupRunning(group) || !hasContentAfterGroup(group))
+      : isGroupRunning(group);
     if (shouldExpand) {
       applyExpand(header, group);
     } else {
@@ -496,42 +507,68 @@ function hasContentAfterGroup(group) {
 
 // ── Auto-manage latest group ──────────────────────────────────────────────
 
+// Hysteresis state: the out-of-group render signal must be observed on two
+// consecutive scans before collapsing. A single snapshot may catch a
+// transient DOM state during streaming (partially rendered step, React
+// reconciliation swapping nodes), so one observation only ARMS the signal;
+// the next scan confirms it.
+var pendingSignal = null; // { header } — armed on first observation
+var confirmTimer = null;  // follow-up scan timer (static-DOM guarantee)
+
 /**
  * Auto-manage expand/collapse for the latest group ONLY.
- * Purely condition-driven — no state machine, no lifecycle tracking.
  *
  * Rules:
  * 1. User manually toggled → respect their choice (skip auto-management).
  * 2. Any tool running → expand.
- * 3. All tools done + non-groupable content after group → collapse.
+ * 3. All tools done + out-of-group render signal confirmed on two
+ *    consecutive scans → collapse.
  * 4. Otherwise → leave as-is.
  * 5. Older groups are never touched here.
  * 6. User flag cleared on header rebuild (new tools → resume auto-management).
  */
 function manageLatestGroup(groups) {
-  if (!groups || groups.length === 0) return;
+  if (!groups || groups.length === 0) { pendingSignal = null; return; }
   var latestGroup = groups[groups.length - 1];
   var first = latestGroup[0];
   var header = first.previousElementSibling;
   if (!header || !header.getAttribute ||
-      header.getAttribute('data-dsao-tg-header') !== '') return;
+      header.getAttribute('data-dsao-tg-header') !== '') { pendingSignal = null; return; }
 
   // User has manually toggled this group → respect their choice.
   // The flag is set on click/keydown and cleared on header rebuild (new tools).
-  if (header.getAttribute('data-dsao-tg-user') === '') return;
+  if (header.getAttribute('data-dsao-tg-user') === '') { pendingSignal = null; return; }
 
   if (isGroupRunning(latestGroup)) {
     if (header.getAttribute('data-dsao-tg-state') === 'collapsed') {
       applyExpand(header, latestGroup);
     }
+    pendingSignal = null;
     return;
   }
 
-  // All tools done — only collapse when non-groupable content follows.
+  // All tools done — collapse only when an out-of-group render signal
+  // (text-bearing assistant step, other flow-kind node, or non-groupable
+  // tool call) is present AND was also observed on the previous scan.
   if (hasContentAfterGroup(latestGroup)) {
-    if (header.getAttribute('data-dsao-tg-state') !== 'collapsed') {
+    if (header.getAttribute('data-dsao-tg-state') === 'collapsed') {
+      pendingSignal = null; // already collapsed; nothing to confirm
+    } else if (pendingSignal && pendingSignal.header === header) {
       applyCollapse(header, latestGroup);
+      pendingSignal = null;
+    } else {
+      pendingSignal = { header: header };
+      // Guarantee a second observation even when the DOM goes static
+      // (no further mutations to trigger a debounced scan).
+      if (!confirmTimer) {
+        confirmTimer = setTimeout(function () {
+          confirmTimer = null;
+          scanToolGroups(document.body);
+        }, 160);
+      }
     }
+  } else {
+    pendingSignal = null;
   }
 }
 
@@ -676,6 +713,7 @@ function startToolGroupObserver() {
   });
   return function () {
     if (scanTimer) { clearTimeout(scanTimer); scanTimer = null; }
+    if (confirmTimer) { clearTimeout(confirmTimer); confirmTimer = null; }
     obs.disconnect();
   };
 }
