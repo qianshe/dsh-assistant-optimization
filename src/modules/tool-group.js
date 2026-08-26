@@ -433,12 +433,19 @@ function isGroupRunning(group) {
 }
 
 /**
- * Returns true if there is any significant (non-transparent) content
- * after the last item of the group — i.e., new content has arrived.
+ * Returns true if non-tool-call content (assistant text, thinking, etc.)
+ * has appeared after the last item of the group — i.e., new content that
+ * warrants auto-collapsing the group.
+ *
+ * A subsequent tool-call item does NOT count: it will be absorbed into the
+ * same group on the next scan, so collapsing for it would cause flicker.
  */
 function hasContentAfterGroup(group) {
   var last = group[group.length - 1];
-  return nextSignificantSibling(last) !== null;
+  var next = nextSignificantSibling(last);
+  if (!next) return false;
+  if (next.getAttribute && next.getAttribute('data-chat-flow-kind') === 'tool-call') return false;
+  return true;
 }
 
 // ── Auto-manage latest group ──────────────────────────────────────────────
