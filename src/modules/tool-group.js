@@ -173,9 +173,12 @@ function isTransparentNode(el) {
   if (!el || !el.getAttribute) return false;
   var kind = el.getAttribute('data-chat-flow-kind');
   if (kind !== 'assistant-step') return false;
-  // Empty if no text content and no rendered height
+  // Has meaningful text → not transparent
   if (el.textContent && el.textContent.trim().length > 0) return false;
-  if (el.offsetHeight > 0) return false;
+  // Has element children that might contain visual content → not transparent
+  if (el.children.length > 0) return false;
+  // Empty container — transparent regardless of offsetHeight
+  // (CSS padding/min-height can make offsetHeight > 0 even when truly empty)
   return true;
 }
 
@@ -481,34 +484,6 @@ function manageLatestGroup(groups) {
       header.getAttribute('data-dsao-tg-header') !== '') return;
 
   var running = isGroupRunning(latestGroup);
-  var autoState = header.getAttribute('data-dsao-tg-auto') || 'collapsed';
-
-  // Diagnostic logging
-  var lastItem = latestGroup[latestGroup.length - 1];
-  var nextRaw = lastItem.nextElementSibling;
-  console.log('[dsao-tg] manageLatest: groupSize=' + latestGroup.length +
-    ' running=' + running + ' autoState=' + autoState +
-    ' state=' + header.getAttribute('data-dsao-tg-state'));
-  if (nextRaw) {
-    console.log('[dsao-tg] nextSibling: kind=' + (nextRaw.getAttribute && nextRaw.getAttribute('data-chat-flow-kind') || '?') +
-      ' offsetH=' + nextRaw.offsetHeight +
-      ' textLen=' + (nextRaw.textContent ? nextRaw.textContent.trim().length : -1) +
-      ' isTransparent=' + isTransparentNode(nextRaw) +
-      ' isGroupable=' + (nextRaw.getAttribute && nextRaw.getAttribute('data-chat-flow-kind') === 'tool-call' ? isGroupableTool(nextRaw) : 'n/a'));
-    // Walk all siblings after the group
-    var walk = nextRaw;
-    var idx = 0;
-    while (walk) {
-      console.log('[dsao-tg]   sibling[' + idx + ']: kind=' + (walk.getAttribute && walk.getAttribute('data-chat-flow-kind') || '?') +
-        ' offsetH=' + walk.offsetHeight + ' textLen=' + (walk.textContent ? walk.textContent.trim().length : -1) +
-        ' transparent=' + isTransparentNode(walk));
-      walk = walk.nextElementSibling;
-      idx++;
-      if (idx > 5) break;
-    }
-  } else {
-    console.log('[dsao-tg] nextSibling: null');
-  }
 
   if (running) {
     // Rule 1: keep expanded while any tool is running
@@ -523,17 +498,11 @@ function manageLatestGroup(groups) {
   var autoState = header.getAttribute('data-dsao-tg-auto') || 'collapsed';
 
   if (autoState === 'running') {
-    // Transition: was running, now all done → mark as waiting.
-    // Return WITHOUT checking hasContentAfterGroup this scan — the next
-    // scan (triggered by genuinely new content arriving) will evaluate it.
-    // This prevents premature collapse when DOM mutations from the tool
-    // finishing and new content arriving arrive in the same batch.
     header.setAttribute('data-dsao-tg-auto', 'done');
     return;
   }
 
   if (autoState === 'done' && hasContentAfterGroup(latestGroup)) {
-    // Rule 2+3: all tools done + new content arrived → auto-collapse
     applyCollapse(header, latestGroup);
     header.setAttribute('data-dsao-tg-auto', 'collapsed');
   }
@@ -626,11 +595,62 @@ function scanToolGroups(root) {
 function startToolGroupObserver() {
   if (typeof document === 'undefined') return function () {};
   ensureStyles();
-  var scan = function () { scanToolGroups(document.body); };
-  scan();
-  var obs = new MutationObserver(scan);
-  obs.observe(document.body, { childList: true, subtree: true });
-  return function () { obs.disconnect(); };
+
+  var scanTimer = null;
+
+  // Check whether mutations are relevant to tool-grouping (vs typing, scrolling, etc.)
+  function hasRelevantMutation(mutations) {
+    for (var i = 0; i < mutations.length; i++) {
+      var m = mutations[i];
+      // data-state attribute changes (tool running→ok etc.)
+      if (m.type === 'attributes' && m.attributeName === 'data-state') return true;
+      // data-dsao-tg-state changes (our own expand/collapse)
+      if (m.type === 'attributes' && m.attributeName === 'data-dsao-tg-state') return true;
+      // Added/removed nodes
+      if (m.addedNodes && m.addedNodes.length > 0) {
+        for (var j = 0; j < m.addedNodes.length; j++) {
+          var node = m.addedNodes[j];
+          if (node.nodeType !== 1) continue;
+          if (node.getAttribute && (
+            node.getAttribute('data-chat-flow-kind') === 'tool-call' ||
+            node.getAttribute('data-chat-flow-kind') === 'assistant-step' ||
+            node.getAttribute('data-dsao-tg-header') === ''
+          )) return true;
+          // Container that might include relevant children
+          if (node.querySelector && (
+            node.querySelector('[data-chat-flow-kind="tool-call"]') ||
+            node.querySelector('[data-chat-flow-kind="assistant-step"]') ||
+            node.querySelector('[data-dsao-tg-header]')
+          )) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  var onMutations = function (mutations) {
+    if (!hasRelevantMutation(mutations)) return;
+    if (scanTimer) clearTimeout(scanTimer);
+    scanTimer = setTimeout(function () {
+      scanTimer = null;
+      scanToolGroups(document.body);
+    }, 80);
+  };
+
+  // Initial scan
+  scanToolGroups(document.body);
+
+  var obs = new MutationObserver(onMutations);
+  obs.observe(document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['data-state', 'data-dsao-tg-state']
+  });
+  return function () {
+    if (scanTimer) { clearTimeout(scanTimer); scanTimer = null; }
+    obs.disconnect();
+  };
 }
 
 exports.startToolGroupObserver = startToolGroupObserver;
