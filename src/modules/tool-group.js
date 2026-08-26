@@ -129,9 +129,44 @@ var CHEVRON = '\u276F';
 // ── Group detection ──────────────────────────────────────────────────────
 
 /**
+ * Check whether all element siblings between `a` (exclusive) and `b` (exclusive)
+ * are "transparent" — i.e. empty assistant-steps with no visible text content.
+ * If yes, `a` and `b` are treated as consecutive for grouping purposes.
+ *
+ * The DSH runtime inserts an assistant-step node between each tool-call; when
+ * the assistant produced no visible text (e.g. only a tool-call block), that
+ * step renders as a near-empty DOM node. We must skip these to detect the
+ * actual consecutive tool-call run.
+ */
+function isTransparentBetween(a, b) {
+  // Fast path: immediate siblings
+  if (a.nextElementSibling === b) return true;
+
+  var sibling = a.nextElementSibling;
+  while (sibling && sibling !== b) {
+    var kind = sibling.getAttribute ? sibling.getAttribute('data-chat-flow-kind') : '';
+
+    // Only assistant-step nodes are allowed in between, and only if empty.
+    if (kind !== 'assistant-step') return false;
+
+    // Check if this assistant-step has visible text content.
+    // The DSH AssistantMarkdown renders markdown blocks; an empty step has
+    // no text nodes with non-whitespace content. We check:
+    //   - offsetHeight > 0 (rendered with height → has content), OR
+    //   - textContent trimmed length > 0 (has text)
+    // Both must be zero/empty for it to be transparent.
+    if (sibling.textContent && sibling.textContent.trim().length > 0) return false;
+    if (sibling.offsetHeight > 0) return false;
+
+    sibling = sibling.nextElementSibling;
+  }
+  return sibling === b;
+}
+
+/**
  * Query all tool-call flow items in DOM order and split into consecutive groups.
- * Only adjacent siblings form a group, and non-groupable tools (todo_write,
- * subagent, etc.) break the chain — they are treated as non-tool-call elements.
+ * Adjacent items (possibly separated by empty assistant-step nodes) form a group.
+ * Non-groupable tools (todo_write, subagent, etc.) break the chain.
  */
 function detectGroups(root) {
   if (!root || !root.querySelectorAll) return [];
@@ -154,11 +189,8 @@ function detectGroups(root) {
     if (current.length === 0) {
       current.push(el);
     } else {
-      // Two tool-call items are "consecutive" only if they are immediate
-      // element siblings — any element between them (assistant-step, user
-      // message, etc.) breaks the group.
       var last = current[current.length - 1];
-      if (last.nextElementSibling === el) {
+      if (isTransparentBetween(last, el)) {
         current.push(el);
       } else {
         if (current.length >= 2) groups.push(current);
@@ -360,6 +392,50 @@ function cleanupAutoCollapse(header) {
   }
 }
 
+/**
+ * Walk forward from `el`, skipping empty assistant-step nodes, and return
+ * the next "significant" element sibling (or null). This mirrors the logic
+ * in isTransparentBetween for consistent traversal.
+ */
+function nextSignificantSibling(el) {
+  var sibling = el.nextElementSibling;
+  while (sibling) {
+    var kind = sibling.getAttribute ? sibling.getAttribute('data-chat-flow-kind') : '';
+    if (kind === 'assistant-step') {
+      // Skip only if empty (no text, no height)
+      var hasContent = (sibling.textContent && sibling.textContent.trim().length > 0) || sibling.offsetHeight > 0;
+      if (!hasContent) {
+        sibling = sibling.nextElementSibling;
+        continue;
+      }
+      return null; // Non-empty assistant-step breaks the chain
+    }
+    return sibling; // Any non-assistant-step node (tool-call, user, etc.)
+  }
+  return null;
+}
+
+/**
+ * Walk backward from `el`, skipping empty assistant-step nodes, and return
+ * the previous "significant" element sibling (or null).
+ */
+function prevSignificantSibling(el) {
+  var sibling = el.previousElementSibling;
+  while (sibling) {
+    var kind = sibling.getAttribute ? sibling.getAttribute('data-chat-flow-kind') : '';
+    if (kind === 'assistant-step') {
+      var hasContent = (sibling.textContent && sibling.textContent.trim().length > 0) || sibling.offsetHeight > 0;
+      if (!hasContent) {
+        sibling = sibling.previousElementSibling;
+        continue;
+      }
+      return null;
+    }
+    return sibling;
+  }
+  return null;
+}
+
 // ── Cleanup ──────────────────────────────────────────────────────────────
 
 function cleanupStaleMarkers(root) {
@@ -367,11 +443,13 @@ function cleanupStaleMarkers(root) {
   var headers = root.querySelectorAll('[data-dsao-tg-header]');
   for (var h = 0; h < headers.length; h++) {
     var header = headers[h];
-    var next = header.nextElementSibling;
+    // Count tool-call items forward from the header, skipping empty assistant-steps
     var count = 0;
-    while (next && next.getAttribute && next.getAttribute('data-chat-flow-kind') === 'tool-call') {
+    var node = header;
+    while (true) {
+      node = nextSignificantSibling(node);
+      if (!node || !node.getAttribute || node.getAttribute('data-chat-flow-kind') !== 'tool-call') break;
       count++;
-      next = next.nextElementSibling;
     }
     if (count < 2) {
       cleanupAutoCollapse(header);
@@ -383,11 +461,13 @@ function cleanupStaleMarkers(root) {
   for (var m = 0; m < marked.length; m++) {
     var el = marked[m];
     var hasHeader = false;
-    var prev = el.previousElementSibling;
-    while (prev) {
+    var prev = el;
+    while (true) {
+      prev = prevSignificantSibling(prev);
+      if (!prev) break;
       if (prev.getAttribute && prev.getAttribute('data-dsao-tg-header') === '') { hasHeader = true; break; }
+      // If we hit a non-tool-call significant node, the chain is broken
       if (prev.getAttribute && prev.getAttribute('data-chat-flow-kind') !== 'tool-call') break;
-      prev = prev.previousElementSibling;
     }
     if (!hasHeader) unmarkGroupItem(el);
   }
@@ -421,3 +501,4 @@ exports.startToolGroupObserver = startToolGroupObserver;
 exports.scanToolGroups = scanToolGroups;
 exports.detectGroups = detectGroups;
 exports.isGroupableTool = isGroupableTool;
+exports.isTransparentBetween = isTransparentBetween;

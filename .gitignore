@@ -5,3 +5,4 @@ dist/
 # Upstream fast-context-mcp reference baseline (MIT; attribution lives in lib/fast-context/NOTICE.md)
 .refs/
 
+dsh-assistant-optimization-*.tgz
