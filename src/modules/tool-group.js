@@ -27,12 +27,19 @@ var GROUPABLE_TOOLS = {
   // Search
   'grep': true,
   'glob': true,
+  'context_search': true,
   // Web
   'web_search': true,
   'web_fetch': true,
+  // Image / inspection
+  'describe_image': true,
+  'read_image': true,
   // Skills
   'skill_search': true,
-  'skill_load': true
+  'skill_load': true,
+  // Interactive / utility
+  'work_note': true,
+  'tu': true
 };
 
 // Prefix match for tool families with dynamic suffixes.
