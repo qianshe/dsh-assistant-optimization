@@ -104,15 +104,9 @@ var CSS = [
   // Leading icon — same slot as ToolRow .o3BgMG_leading
   '.dsao-tg-headerIcon{flex-shrink:0;display:inline-flex;align-items:center;',
   '  color:var(--dsw-alias-label-caption);margin-right:8px}',
-  // Title — matches .o3BgMG_title (font-weight 400)
-  '.dsao-tg-headerLabel{font-weight:400;color:var(--dsw-alias-label-secondary);',
-  '  white-space:nowrap}',
-  // Separator dot — matches .o3BgMG_sep exactly
-  '.dsao-tg-headerSep{background:var(--dsw-alias-label-caption);border-radius:1px;',
-  '  flex:none;width:2px;height:2px;margin:0 8px}',
-  // Summary / count — matches .o3BgMG_summary (tertiary, ellipsis, auto flex)
-  '.dsao-tg-headerCount{text-overflow:ellipsis;white-space:nowrap;min-width:0;',
-  '  color:var(--dsw-alias-label-tertiary);flex:auto;font-size:14px;line-height:24px;',
+  // Summary — matches .o3BgMG_summary (tertiary, ellipsis, auto flex)
+  '.dsao-tg-headerCount{font-weight:400;text-overflow:ellipsis;white-space:nowrap;min-width:0;',
+  '  color:var(--dsw-alias-label-secondary);flex:auto;font-size:14px;line-height:24px;',
   '  overflow:hidden}',
   // Spacer + toggle on the right
   '.dsao-tg-headerSpacer{flex:auto}',
@@ -123,8 +117,8 @@ var CSS = [
   '  font-size:14px;line-height:1;color:var(--dsw-alias-label-secondary)}',
   '.dsao-tg-header[data-dsao-tg-state="expanded"] .dsao-tg-chevron{transform:rotate(90deg)}',
   '.dsao-tg-header[data-dsao-tg-state="collapsed"] .dsao-tg-chevron{transform:rotate(0deg)}',
-  // Subtle hover — only the label brightens, no background box
-  '.dsao-tg-header:hover .dsao-tg-headerLabel{color:var(--dsw-alias-label-primary)}'
+  // Subtle hover — only the summary brightens, no background box
+  '.dsao-tg-header:hover .dsao-tg-headerCount{color:var(--dsw-alias-label-primary)}'
 ].join('');
 
 var _styleInjected = false;
@@ -226,9 +220,36 @@ function areConsecutive(a, b) {
   return sibling === b;
 }
 
+/**
+ * Collect unique tool names from a group, preserving first-appearance order.
+ * Returns a deduplicated array, e.g. ["read", "grep", "bash"].
+ */
+function uniqueToolNames(group) {
+  var seen = {};
+  var names = [];
+  for (var i = 0; i < group.length; i++) {
+    var name = toolNameOf(group[i]);
+    if (name && !seen[name]) {
+      seen[name] = true;
+      names.push(name);
+    }
+  }
+  return names;
+}
+
+/**
+ * Build the summary text for a group: unique tool names joined by "、" +
+ * " · N tools" (Chinese: " · N 个工具").
+ * e.g. "read、grep、bash · 5 个工具"
+ */
+function summaryText(group) {
+  var names = uniqueToolNames(group);
+  return names.join('\u3001') + ' \u00B7 ' + group.length + ' \u4E2A\u5DE5\u5177';
+}
+
 // ── Header creation ──────────────────────────────────────────────────────
 
-function createHeader(groupSize) {
+function createHeader(group) {
   var header = document.createElement('div');
   header.className = 'dsao-tg-header';
   header.setAttribute('data-dsao-tg-header', '');
@@ -242,21 +263,16 @@ function createHeader(groupSize) {
   icon.className = 'dsao-tg-headerIcon';
   icon.innerHTML = TOOL_ICON_SVG;
 
-  // Title (matches .o3BgMG_title)
-  var label = document.createElement('span');
-  label.className = 'dsao-tg-headerLabel';
-  label.textContent = '\u5DE5\u5177\u8C03\u7528';
-
   // Separator dot (matches .o3BgMG_sep)
   var sep = document.createElement('span');
   sep.className = 'dsao-tg-headerSep';
   sep.setAttribute('aria-hidden', 'true');
 
-  // Summary line — shows count in tertiary color (matches .o3BgMG_summary)
+  // Summary line — tool names + count (matches .o3BgMG_summary)
   var summary = document.createElement('span');
   summary.className = 'dsao-tg-headerCount';
-  summary.setAttribute('data-dsao-tg-count', '');
-  summary.textContent = groupSize + ' \u4E2A\u8C03\u7528';
+  summary.setAttribute('data-dsao-tg-summary', '');
+  summary.textContent = summaryText(group);
 
   // Spacer
   var spacer = document.createElement('span');
@@ -275,7 +291,6 @@ function createHeader(groupSize) {
   toggle.appendChild(chevron);
 
   header.appendChild(icon);
-  header.appendChild(label);
   header.appendChild(sep);
   header.appendChild(summary);
   header.appendChild(spacer);
@@ -289,11 +304,11 @@ function createHeader(groupSize) {
 function applyCollapse(header, group) {
   header.setAttribute('data-dsao-tg-state', 'collapsed');
   header.setAttribute('aria-expanded', 'false');
-  for (var i = 1; i < group.length; i++) {
+  for (var i = 0; i < group.length; i++) {
     group[i].setAttribute('data-dsao-tg-collapsed', '');
   }
-  var count = header.querySelector('[data-dsao-tg-count]');
-  if (count) count.textContent = group.length + ' \u4E2A\u8C03\u7528';
+  var summary = header.querySelector('[data-dsao-tg-summary]');
+  if (summary) summary.textContent = summaryText(group);
   var toggleLabel = header.querySelector('[data-dsao-tg-toggle-label]');
   if (toggleLabel) toggleLabel.textContent = '\u5C55\u5F00';
 }
@@ -301,11 +316,9 @@ function applyCollapse(header, group) {
 function applyExpand(header, group) {
   header.setAttribute('data-dsao-tg-state', 'expanded');
   header.setAttribute('aria-expanded', 'true');
-  for (var i = 1; i < group.length; i++) {
+  for (var i = 0; i < group.length; i++) {
     group[i].removeAttribute('data-dsao-tg-collapsed');
   }
-  var count = header.querySelector('[data-dsao-tg-count]');
-  if (count) count.textContent = '';
   var toggleLabel = header.querySelector('[data-dsao-tg-toggle-label]');
   if (toggleLabel) toggleLabel.textContent = '\u6536\u8D77';
 }
@@ -353,7 +366,7 @@ function applyGroup(group) {
   }
 
   if (!headerExists) {
-    var header = createHeader(group.length);
+    var header = createHeader(group);
     header.setAttribute('data-dsao-tg-size', String(group.length));
     first.parentNode.insertBefore(header, first);
 
@@ -374,7 +387,7 @@ function applyGroup(group) {
     existingHeader.setAttribute('data-dsao-tg-size', String(group.length));
     var state = existingHeader.getAttribute('data-dsao-tg-state');
     if (state === 'collapsed') {
-      for (var j = 1; j < group.length; j++) group[j].setAttribute('data-dsao-tg-collapsed', '');
+      for (var j = 0; j < group.length; j++) group[j].setAttribute('data-dsao-tg-collapsed', '');
     }
     if (existingHeader._dsaoAutoCollapse) {
       existingHeader._dsaoAutoCollapse.group = group;
