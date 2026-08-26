@@ -101,14 +101,12 @@ var CSS = [
   '  font-size:14px;line-height:24px;color:var(--dsw-alias-label-secondary);',
   '  background:transparent;border:none;border-radius:0;',
   '  min-width:0;transition:color 120ms}',
-  // Leading icon — mirrors .CY-8Ka_leading (16px box, centered, 6px right margin)
+  // Leading icon — 16px flex container, vertically centered, 6px right gap.
+  // Matches BashRow's .CY-8Ka_leading exactly.
   '.dsao-tg-headerIcon{width:16px;height:16px;flex:none;',
   '  display:inline-flex;align-items:center;justify-content:center;',
   '  color:var(--dsw-alias-label-tertiary);margin-right:6px;position:relative}',
-  // Separator dot — matches .o3BgMG_sep exactly
-  '.dsao-tg-headerSep{background:var(--dsw-alias-label-caption);border-radius:1px;',
-  '  flex:none;width:2px;height:2px;margin:0 8px}',
-  // Summary — matches .o3BgMG_summary (secondary weight, ellipsis, auto flex)
+  // Summary — tool names + count, matches .o3BgMG_summary styling
   '.dsao-tg-headerCount{font-weight:400;text-overflow:ellipsis;white-space:nowrap;min-width:0;',
   '  color:var(--dsw-alias-label-secondary);flex:auto;font-size:14px;line-height:24px;',
   '  overflow:hidden}',
@@ -116,12 +114,12 @@ var CSS = [
   '.dsao-tg-headerSpacer{flex:auto}',
   '.dsao-tg-toggle{flex:none;display:inline-flex;align-items:center;gap:4px;',
   '  color:var(--dsw-alias-label-secondary);font-size:14px;line-height:24px}',
-  // Chevron — uses DSH's official IconChevronRightOutline14 / IconChevronDownOutline14 paths
-  '.dsao-tg-chevron{display:inline-flex;transition:transform 180ms ease;',
+  // Chevron — official DSH IconChevronRightOutline14 path
+  '.dsao-tg-chevron{display:inline-flex;align-items:center;transition:transform 180ms ease;',
   '  color:var(--dsw-alias-label-secondary)}',
   '.dsao-tg-header[data-dsao-tg-state="expanded"] .dsao-tg-chevron{transform:rotate(90deg)}',
   '.dsao-tg-header[data-dsao-tg-state="collapsed"] .dsao-tg-chevron{transform:rotate(0deg)}',
-  // Subtle hover — summary brightens, no background box
+  // Subtle hover — summary brightens
   '.dsao-tg-header:hover .dsao-tg-headerCount{color:var(--dsw-alias-label-primary)}'
 ].join('');
 
@@ -140,11 +138,10 @@ function ensureStyles() {
 
 // ── SVG icons ────────────────────────────────────────────────────────────
 
-// Leading icon: stacked-layer glyph (14×14, outline, matches DSH icon grid).
-// Conveys "multiple tool calls grouped together" — two offset rounded squares.
-var TOOL_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">'
-  + '<rect x="3.5" y="1.5" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1" opacity="0.5"/>'
-  + '<rect x="1.5" y="3.5" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1"/>'
+// Leading icon: DSH's IconCodeOutline16 (# grid glyph) — clean, recognizable,
+// conveys "code/tool execution". 14px render inside 16px container.
+var TOOL_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">'
+  + '<path fill-rule="evenodd" clip-rule="evenodd" d="M12.3368 1.53569L11.931 4.43172H14.8086V5.79673H11.7404L11.1962 9.67859H14.2839V11.0436H11.0056L10.4994 14.6529L9.14873 14.4643L9.62731 11.0436H5.75876L5.25252 14.6529L3.90186 14.4643L4.38043 11.0436H1.69141V9.67859H4.57104L5.11417 5.79673H2.21609V4.43172H5.30581L5.73724 1.34713L7.08995 1.53569L6.68414 4.43172H10.5527L10.9841 1.34713L12.3368 1.53569ZM5.94937 9.67859H9.81791L10.361 5.79673H6.49353L5.94937 9.67859Z" fill="currentColor"/>'
   + '</svg>';
 
 // Chevron: official DSH IconChevronRightOutline14 path (rotates 90° when expanded).
@@ -277,11 +274,6 @@ function createHeader(group) {
   icon.className = 'dsao-tg-headerIcon';
   icon.innerHTML = TOOL_ICON_SVG;
 
-  // Separator dot (matches .o3BgMG_sep)
-  var sep = document.createElement('span');
-  sep.className = 'dsao-tg-headerSep';
-  sep.setAttribute('aria-hidden', 'true');
-
   // Summary line — tool names + count (matches .o3BgMG_summary)
   var summary = document.createElement('span');
   summary.className = 'dsao-tg-headerCount';
@@ -305,7 +297,6 @@ function createHeader(group) {
   toggle.appendChild(chevron);
 
   header.appendChild(icon);
-  header.appendChild(sep);
   header.appendChild(summary);
   header.appendChild(spacer);
   header.appendChild(toggle);
