@@ -433,18 +433,19 @@ function isGroupRunning(group) {
 }
 
 /**
- * Returns true if non-tool-call content (assistant text, thinking, etc.)
- * has appeared after the last item of the group — i.e., new content that
- * warrants auto-collapsing the group.
+ * Returns true if content that will NOT be absorbed into the group has
+ * appeared after the last item — i.e., new content warrants auto-collapsing.
  *
- * A subsequent tool-call item does NOT count: it will be absorbed into the
- * same group on the next scan, so collapsing for it would cause flicker.
+ * Only groupable tool-call items get absorbed into the same group on the
+ * next scan. Everything else (assistant text, thinking, subagent calls,
+ * task-management tools, etc.) breaks the group and should trigger collapse.
  */
 function hasContentAfterGroup(group) {
   var last = group[group.length - 1];
   var next = nextSignificantSibling(last);
   if (!next) return false;
-  if (next.getAttribute && next.getAttribute('data-chat-flow-kind') === 'tool-call') return false;
+  // A groupable tool-call sibling will be absorbed into the group → don't collapse
+  if (next.getAttribute && next.getAttribute('data-chat-flow-kind') === 'tool-call' && isGroupableTool(next)) return false;
   return true;
 }
 
