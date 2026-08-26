@@ -95,16 +95,20 @@ function isGroupableTool(flowItem) {
 //   - Only the interactive affordances (toggle text, chevron) are distinguished
 var CSS = [
   '[data-dsao-tg-collapsed]{display:none!important}',
-  // Header row mirrors ToolRow's .o3BgMG_root + .o3BgMG_row visual weight:
-  // transparent background, same line-height, clickable, no visible border.
+  // Header row mirrors ToolRow's .o3BgMG_root + .o3BgMG_row:
+  // transparent, 24px line-height, no border, clickable.
   '.dsao-tg-header{display:flex;align-items:center;gap:0;padding:0;cursor:pointer;user-select:none;',
   '  font-size:14px;line-height:24px;color:var(--dsw-alias-label-secondary);',
   '  background:transparent;border:none;border-radius:0;',
   '  min-width:0;transition:color 120ms}',
-  // Leading icon — same slot as ToolRow .o3BgMG_leading
-  '.dsao-tg-headerIcon{flex-shrink:0;display:inline-flex;align-items:center;',
-  '  color:var(--dsw-alias-label-caption);margin-right:8px}',
-  // Summary — matches .o3BgMG_summary (tertiary, ellipsis, auto flex)
+  // Leading icon — mirrors .CY-8Ka_leading (16px box, centered, 6px right margin)
+  '.dsao-tg-headerIcon{width:16px;height:16px;flex:none;',
+  '  display:inline-flex;align-items:center;justify-content:center;',
+  '  color:var(--dsw-alias-label-tertiary);margin-right:6px;position:relative}',
+  // Separator dot — matches .o3BgMG_sep exactly
+  '.dsao-tg-headerSep{background:var(--dsw-alias-label-caption);border-radius:1px;',
+  '  flex:none;width:2px;height:2px;margin:0 8px}',
+  // Summary — matches .o3BgMG_summary (secondary weight, ellipsis, auto flex)
   '.dsao-tg-headerCount{font-weight:400;text-overflow:ellipsis;white-space:nowrap;min-width:0;',
   '  color:var(--dsw-alias-label-secondary);flex:auto;font-size:14px;line-height:24px;',
   '  overflow:hidden}',
@@ -112,12 +116,12 @@ var CSS = [
   '.dsao-tg-headerSpacer{flex:auto}',
   '.dsao-tg-toggle{flex:none;display:inline-flex;align-items:center;gap:4px;',
   '  color:var(--dsw-alias-label-secondary);font-size:14px;line-height:24px}',
-  // Chevron — matches .o3BgMG_chevron color + transition
-  '.dsao-tg-chevron{display:inline-block;transition:transform 180ms ease;',
-  '  font-size:14px;line-height:1;color:var(--dsw-alias-label-secondary)}',
+  // Chevron — uses DSH's official IconChevronRightOutline14 / IconChevronDownOutline14 paths
+  '.dsao-tg-chevron{display:inline-flex;transition:transform 180ms ease;',
+  '  color:var(--dsw-alias-label-secondary)}',
   '.dsao-tg-header[data-dsao-tg-state="expanded"] .dsao-tg-chevron{transform:rotate(90deg)}',
   '.dsao-tg-header[data-dsao-tg-state="collapsed"] .dsao-tg-chevron{transform:rotate(0deg)}',
-  // Subtle hover — only the summary brightens, no background box
+  // Subtle hover — summary brightens, no background box
   '.dsao-tg-header:hover .dsao-tg-headerCount{color:var(--dsw-alias-label-primary)}'
 ].join('');
 
@@ -134,9 +138,19 @@ function ensureStyles() {
   _styleInjected = true;
 }
 
-// ── SVG icon (matches IconApiOutline14 from ui-primitives) ────────────────
+// ── SVG icons ────────────────────────────────────────────────────────────
 
-var TOOL_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3.5 1.5L1.5 3.5L3 5L1.5 6.5L3.5 8.5L5 7L6.5 8.5L8.5 6.5L7 5L8.5 3.5L6.5 1.5L5 3L3.5 1.5Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="none"/><circle cx="11.5" cy="11.5" r="3" stroke="currentColor" stroke-width="1.2" fill="none"/></svg>';
+// Leading icon: stacked-layer glyph (14×14, outline, matches DSH icon grid).
+// Conveys "multiple tool calls grouped together" — two offset rounded squares.
+var TOOL_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">'
+  + '<rect x="3.5" y="1.5" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1" opacity="0.5"/>'
+  + '<rect x="1.5" y="3.5" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1"/>'
+  + '</svg>';
+
+// Chevron: official DSH IconChevronRightOutline14 path (rotates 90° when expanded).
+var CHEVRON_SVG = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">'
+  + '<path d="M5.5 2.15137L5.92383 2.57617L8.65137 5.30273C8.90706 5.55843 9.13382 5.78438 9.29785 5.98828C9.46883 6.20088 9.61756 6.44405 9.66602 6.75C9.69222 6.91565 9.69222 7.08435 9.66602 7.25C9.61756 7.55595 9.46883 7.79912 9.29785 8.01172C9.13382 8.21561 8.90706 8.44157 8.65137 8.69727L5.92383 11.4238L5.5 11.8486L4.65137 11L5.07617 10.5762L7.80273 7.84863C8.07732 7.57405 8.24849 7.40124 8.3623 7.25977C8.46904 7.12709 8.47813 7.07728 8.48047 7.0625C8.48703 7.02105 8.48703 6.97895 8.48047 6.9375C8.47813 6.92272 8.46904 6.87291 8.3623 6.74023C8.24848 6.59876 8.07732 6.42595 7.80273 6.15137L5.07617 3.42383L4.65137 3L5.5 2.15137Z" fill="currentColor"/>'
+  + '</svg>';
 var CHEVRON = '\u276F';
 
 // ── Group detection ──────────────────────────────────────────────────────
@@ -286,7 +300,7 @@ function createHeader(group) {
   toggleLabel.textContent = '\u5C55\u5F00';
   var chevron = document.createElement('span');
   chevron.className = 'dsao-tg-chevron';
-  chevron.textContent = CHEVRON;
+  chevron.innerHTML = CHEVRON_SVG;
   toggle.appendChild(toggleLabel);
   toggle.appendChild(chevron);
 
