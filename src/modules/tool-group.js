@@ -43,13 +43,32 @@ var GROUPABLE_PREFIXES = [
 
 /**
  * Read the tool name from a tool-call flow item by querying its inner
- * ToolRow root element (which carries data-tool=<name>).
+ * ToolRow / view root element. Different tool views expose the tool name
+ * through different data attributes:
+ *
+ *   - ToolRow (read, write, edit, grep, glob, web_search, etc.):
+ *       <div data-tool="read" ...>
+ *   - BashRow (bash-specific custom view, NOT ToolRow-based):
+ *       <div data-sample="bash" data-variant="bash" ...>
+ *
+ * We check data-tool first, then data-sample, then fall back to scanning
+ * the visible title text for known tool names.
  */
 function toolNameOf(flowItem) {
   if (!flowItem || !flowItem.querySelector) return '';
+  // 1. ToolRow: <div data-tool="read">
   var row = flowItem.querySelector('[data-tool]');
-  if (!row) return '';
-  return row.getAttribute('data-tool') || '';
+  if (row) {
+    var name = row.getAttribute('data-tool') || '';
+    if (name) return name;
+  }
+  // 2. BashRow: <div data-sample="bash">
+  var sample = flowItem.querySelector('[data-sample]');
+  if (sample) {
+    var sampleName = sample.getAttribute('data-sample') || '';
+    if (sampleName) return sampleName;
+  }
+  return '';
 }
 
 /**
@@ -129,43 +148,29 @@ var CHEVRON = '\u276F';
 // ── Group detection ──────────────────────────────────────────────────────
 
 /**
- * Check whether all element siblings between `a` (exclusive) and `b` (exclusive)
- * are "transparent" — i.e. empty assistant-steps with no visible text content.
- * If yes, `a` and `b` are treated as consecutive for grouping purposes.
+ * Walk the children of each chat column container and build groups of
+ * consecutive tool-call flow items, skipping "transparent" nodes (empty
+ * assistant-steps with no visible text) between them.
  *
- * The DSH runtime inserts an assistant-step node between each tool-call; when
- * the assistant produced no visible text (e.g. only a tool-call block), that
- * step renders as a near-empty DOM node. We must skip these to detect the
- * actual consecutive tool-call run.
+ * Transparent nodes: any element with data-chat-flow-kind="assistant-step"
+ * that has no text content and zero rendered height. These are the DSH
+ * runtime's placeholder steps between tool calls that produce no visible
+ * assistant text.
  */
-function isTransparentBetween(a, b) {
-  // Fast path: immediate siblings
-  if (a.nextElementSibling === b) return true;
-
-  var sibling = a.nextElementSibling;
-  while (sibling && sibling !== b) {
-    var kind = sibling.getAttribute ? sibling.getAttribute('data-chat-flow-kind') : '';
-
-    // Only assistant-step nodes are allowed in between, and only if empty.
-    if (kind !== 'assistant-step') return false;
-
-    // Check if this assistant-step has visible text content.
-    // The DSH AssistantMarkdown renders markdown blocks; an empty step has
-    // no text nodes with non-whitespace content. We check:
-    //   - offsetHeight > 0 (rendered with height → has content), OR
-    //   - textContent trimmed length > 0 (has text)
-    // Both must be zero/empty for it to be transparent.
-    if (sibling.textContent && sibling.textContent.trim().length > 0) return false;
-    if (sibling.offsetHeight > 0) return false;
-
-    sibling = sibling.nextElementSibling;
-  }
-  return sibling === b;
+function isTransparentNode(el) {
+  if (!el || !el.getAttribute) return false;
+  var kind = el.getAttribute('data-chat-flow-kind');
+  if (kind !== 'assistant-step') return false;
+  // Empty if no text content and no rendered height
+  if (el.textContent && el.textContent.trim().length > 0) return false;
+  if (el.offsetHeight > 0) return false;
+  return true;
 }
 
 /**
  * Query all tool-call flow items in DOM order and split into consecutive groups.
- * Adjacent items (possibly separated by empty assistant-step nodes) form a group.
+ * Two tool-call items are "consecutive" if every element between them (within
+ * the same parent) is a transparent node.
  * Non-groupable tools (todo_write, subagent, etc.) break the chain.
  */
 function detectGroups(root) {
@@ -190,7 +195,7 @@ function detectGroups(root) {
       current.push(el);
     } else {
       var last = current[current.length - 1];
-      if (isTransparentBetween(last, el)) {
+      if (areConsecutive(last, el)) {
         current.push(el);
       } else {
         if (current.length >= 2) groups.push(current);
@@ -200,6 +205,25 @@ function detectGroups(root) {
   }
   if (current.length >= 2) groups.push(current);
   return groups;
+}
+
+/**
+ * Check if two tool-call flow items are "consecutive": same parent and every
+ * element sibling between them is transparent (empty assistant-step).
+ */
+function areConsecutive(a, b) {
+  if (!a || !b) return false;
+  // Must share the same parent
+  if (a.parentNode !== b.parentNode) return false;
+  // Fast path: immediate siblings
+  if (a.nextElementSibling === b) return true;
+
+  var sibling = a.nextElementSibling;
+  while (sibling && sibling !== b) {
+    if (!isTransparentNode(sibling)) return false;
+    sibling = sibling.nextElementSibling;
+  }
+  return sibling === b;
 }
 
 // ── Header creation ──────────────────────────────────────────────────────
@@ -393,43 +417,31 @@ function cleanupAutoCollapse(header) {
 }
 
 /**
- * Walk forward from `el`, skipping empty assistant-step nodes, and return
- * the next "significant" element sibling (or null). This mirrors the logic
- * in isTransparentBetween for consistent traversal.
+ * Walk forward from `el`, skipping transparent nodes, and return
+ * the next "significant" element sibling (or null).
  */
 function nextSignificantSibling(el) {
   var sibling = el.nextElementSibling;
   while (sibling) {
-    var kind = sibling.getAttribute ? sibling.getAttribute('data-chat-flow-kind') : '';
-    if (kind === 'assistant-step') {
-      // Skip only if empty (no text, no height)
-      var hasContent = (sibling.textContent && sibling.textContent.trim().length > 0) || sibling.offsetHeight > 0;
-      if (!hasContent) {
-        sibling = sibling.nextElementSibling;
-        continue;
-      }
-      return null; // Non-empty assistant-step breaks the chain
+    if (isTransparentNode(sibling)) {
+      sibling = sibling.nextElementSibling;
+      continue;
     }
-    return sibling; // Any non-assistant-step node (tool-call, user, etc.)
+    return sibling;
   }
   return null;
 }
 
 /**
- * Walk backward from `el`, skipping empty assistant-step nodes, and return
+ * Walk backward from `el`, skipping transparent nodes, and return
  * the previous "significant" element sibling (or null).
  */
 function prevSignificantSibling(el) {
   var sibling = el.previousElementSibling;
   while (sibling) {
-    var kind = sibling.getAttribute ? sibling.getAttribute('data-chat-flow-kind') : '';
-    if (kind === 'assistant-step') {
-      var hasContent = (sibling.textContent && sibling.textContent.trim().length > 0) || sibling.offsetHeight > 0;
-      if (!hasContent) {
-        sibling = sibling.previousElementSibling;
-        continue;
-      }
-      return null;
+    if (isTransparentNode(sibling)) {
+      sibling = sibling.previousElementSibling;
+      continue;
     }
     return sibling;
   }
@@ -501,4 +513,5 @@ exports.startToolGroupObserver = startToolGroupObserver;
 exports.scanToolGroups = scanToolGroups;
 exports.detectGroups = detectGroups;
 exports.isGroupableTool = isGroupableTool;
-exports.isTransparentBetween = isTransparentBetween;
+exports.areConsecutive = areConsecutive;
+exports.isTransparentNode = isTransparentNode;
