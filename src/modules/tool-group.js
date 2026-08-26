@@ -357,6 +357,10 @@ function unmarkGroupItem(el) {
 /**
  * Apply grouping to one group of consecutive tool-call items.
  * Idempotent: if the header already exists and group size matches, update in place.
+ *
+ * Initial state: if any tool is running, start expanded; otherwise collapsed.
+ * The auto-manage logic in manageLatestGroup() handles subsequent transitions
+ * for the latest group only.
  */
 function applyGroup(group) {
   var first = group[0];
@@ -384,62 +388,116 @@ function applyGroup(group) {
     header.setAttribute('data-dsao-tg-size', String(group.length));
     first.parentNode.insertBefore(header, first);
 
-    // Bind toggle
+    // Bind toggle — user clicks always override auto state
     var toggleFn = function () { toggleGroup(header, group); };
     header.addEventListener('click', function (e) { e.stopPropagation(); toggleFn(); });
     header.addEventListener('keydown', function (e) {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); toggleFn(); }
     });
 
-    // Apply default collapsed state
-    applyCollapse(header, group);
-
-    // Auto-collapse: when header leaves viewport, collapse back to default
-    setupAutoCollapse(header, group);
+    // Initial state: expanded if running, collapsed otherwise.
+    // Auto-state tracks the lifecycle: running → done → collapsed.
+    if (isGroupRunning(group)) {
+      applyExpand(header, group);
+      header.setAttribute('data-dsao-tg-auto', 'running');
+    } else {
+      applyCollapse(header, group);
+      header.setAttribute('data-dsao-tg-auto', 'collapsed');
+    }
   } else {
-    // Header exists and size matches — ensure collapse state is consistent
+    // Header exists and size matches — ensure collapse DOM consistency only.
+    // Do NOT change the logical state here; manageLatestGroup handles that.
     existingHeader.setAttribute('data-dsao-tg-size', String(group.length));
     var state = existingHeader.getAttribute('data-dsao-tg-state');
     if (state === 'collapsed') {
       for (var j = 0; j < group.length; j++) group[j].setAttribute('data-dsao-tg-collapsed', '');
     }
-    if (existingHeader._dsaoAutoCollapse) {
-      existingHeader._dsaoAutoCollapse.group = group;
-    }
   }
 }
 
-// ── Auto-collapse via IntersectionObserver ────────────────────────────────
+// ── Running-state detection ──────────────────────────────────────────────
 
-function setupAutoCollapse(header, group) {
-  if (typeof IntersectionObserver === 'undefined') return;
-  if (header._dsaoAutoCollapse) return;
-
-  var autoData = { header: header, group: group, wasVisible: true };
-  header._dsaoAutoCollapse = autoData;
-
-  var observer = new IntersectionObserver(function (entries) {
-    for (var i = 0; i < entries.length; i++) {
-      var entry = entries[i];
-      var isVisible = entry.isIntersecting;
-      if (!isVisible && autoData.wasVisible) {
-        var currentState = autoData.header.getAttribute('data-dsao-tg-state');
-        if (currentState === 'expanded') {
-          applyCollapse(autoData.header, autoData.group);
-        }
-      }
-      autoData.wasVisible = isVisible;
-    }
-  }, { threshold: 0 });
-
-  observer.observe(header);
-  autoData.observer = observer;
+/**
+ * Check if a single tool-call flow item has any inner element marked as
+ * "running" (data-state="running"). DSH's ToolRow and BashRow both set
+ * data-state on their root elements while the tool is in-flight.
+ */
+function isItemRunning(item) {
+  if (!item || !item.querySelectorAll) return false;
+  var stateEls = item.querySelectorAll('[data-state]');
+  for (var i = 0; i < stateEls.length; i++) {
+    if (stateEls[i].getAttribute('data-state') === 'running') return true;
+  }
+  return false;
 }
 
-function cleanupAutoCollapse(header) {
-  if (header._dsaoAutoCollapse && header._dsaoAutoCollapse.observer) {
-    header._dsaoAutoCollapse.observer.disconnect();
-    header._dsaoAutoCollapse = null;
+/**
+ * Returns true if ANY item in the group is still running.
+ */
+function isGroupRunning(group) {
+  for (var i = 0; i < group.length; i++) {
+    if (isItemRunning(group[i])) return true;
+  }
+  return false;
+}
+
+/**
+ * Returns true if there is any significant (non-transparent) content
+ * after the last item of the group — i.e., new content has arrived.
+ */
+function hasContentAfterGroup(group) {
+  var last = group[group.length - 1];
+  return nextSignificantSibling(last) !== null;
+}
+
+// ── Auto-manage latest group ──────────────────────────────────────────────
+
+/**
+ * Manage the expand/collapse lifecycle of the LATEST group only.
+ *
+ * Rules:
+ * 1. If the latest group has running tools → keep expanded.
+ * 2. When all tools finish (running → done) → wait for new content.
+ * 3. When new content arrives after a "done" group → auto-collapse.
+ * 4. Older groups are never touched here — user controls them manually.
+ *
+ * The lifecycle is tracked via data-dsao-tg-auto:
+ *   "running" → tools in-flight, always expanded
+ *   "done"    → tools finished, waiting for new content to collapse
+ *   "collapsed" → auto-collapsed or initially done, no further action
+ */
+function manageLatestGroup(groups) {
+  if (!groups || groups.length === 0) return;
+  var latestGroup = groups[groups.length - 1];
+  var first = latestGroup[0];
+  var header = first.previousElementSibling;
+  if (!header || !header.getAttribute ||
+      header.getAttribute('data-dsao-tg-header') !== '') return;
+
+  var running = isGroupRunning(latestGroup);
+
+  if (running) {
+    // Rule 1: keep expanded while any tool is running
+    if (header.getAttribute('data-dsao-tg-state') === 'collapsed') {
+      applyExpand(header, latestGroup);
+    }
+    header.setAttribute('data-dsao-tg-auto', 'running');
+    return;
+  }
+
+  // All tools done — check lifecycle state
+  var autoState = header.getAttribute('data-dsao-tg-auto') || 'collapsed';
+
+  if (autoState === 'running') {
+    // Transition: was running, now all done → mark as waiting
+    header.setAttribute('data-dsao-tg-auto', 'done');
+    autoState = 'done';
+  }
+
+  if (autoState === 'done' && hasContentAfterGroup(latestGroup)) {
+    // Rule 2+3: all tools done + new content arrived → auto-collapse
+    applyCollapse(header, latestGroup);
+    header.setAttribute('data-dsao-tg-auto', 'collapsed');
   }
 }
 
@@ -491,7 +549,6 @@ function cleanupStaleMarkers(root) {
       count++;
     }
     if (count < 2) {
-      cleanupAutoCollapse(header);
       if (header.parentNode) header.parentNode.removeChild(header);
     }
   }
@@ -522,6 +579,8 @@ function scanToolGroups(root) {
   for (var i = 0; i < groups.length; i++) {
     applyGroup(groups[i]);
   }
+  // Auto-manage expand/collapse for the latest group only
+  manageLatestGroup(groups);
 }
 
 // ── Observer ─────────────────────────────────────────────────────────────
