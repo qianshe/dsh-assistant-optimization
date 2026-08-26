@@ -127,7 +127,9 @@ var CSS = [
   '.dsao-tg-header[data-dsao-tg-state="expanded"] .dsao-tg-chevron{transform:rotate(90deg)}',
   '.dsao-tg-header[data-dsao-tg-state="collapsed"] .dsao-tg-chevron{transform:rotate(0deg)}',
   // Subtle hover — summary brightens
-  '.dsao-tg-header:hover .dsao-tg-headerCount{color:var(--dsw-alias-label-primary)}'
+  '.dsao-tg-header:hover .dsao-tg-headerCount{color:var(--dsw-alias-label-primary)}',
+  // Indent tool-call items inside a group for visual hierarchy
+  '[data-dsao-tg-pos]{padding-left:20px}'
 ].join('');
 
 var _styleInjected = false;
@@ -173,12 +175,11 @@ function isTransparentNode(el) {
   if (!el || !el.getAttribute) return false;
   var kind = el.getAttribute('data-chat-flow-kind');
   if (kind !== 'assistant-step') return false;
-  // Has meaningful text → not transparent
+  // Has meaningful text → not transparent.
+  // Don't check offsetHeight or children — CSS padding/min-height on
+  // empty containers and React-rendered empty wrappers can make them
+  // appear non-empty when they're visually blank.
   if (el.textContent && el.textContent.trim().length > 0) return false;
-  // Has element children that might contain visual content → not transparent
-  if (el.children.length > 0) return false;
-  // Empty container — transparent regardless of offsetHeight
-  // (CSS padding/min-height can make offsetHeight > 0 even when truly empty)
   return true;
 }
 
