@@ -345,6 +345,24 @@ function toggleGroup(header, group) {
   else applyCollapse(header, group);
 }
 
+/**
+ * Walk forward from a header element to collect the current group items
+ * from the live DOM. Used at toggle-click time to avoid stale closures.
+ * Returns an array of groupable tool-call flow items (length >= 2).
+ */
+function collectGroupFromHeader(header) {
+  var items = [];
+  var node = header.nextElementSibling;
+  while (node) {
+    if (isTransparentNode(node)) { node = node.nextElementSibling; continue; }
+    if (!node.getAttribute || node.getAttribute('data-chat-flow-kind') !== 'tool-call') break;
+    if (!isGroupableTool(node)) break;
+    items.push(node);
+    node = node.nextElementSibling;
+  }
+  return items;
+}
+
 // ── Group marking ────────────────────────────────────────────────────────
 
 function markGroupItem(el, pos) {
@@ -370,14 +388,14 @@ function applyGroup(group) {
   var headerExists = existingHeader && existingHeader.getAttribute &&
     existingHeader.getAttribute('data-dsao-tg-header') === '';
 
-  // Save auto state before potential header removal (size change)
-  var prevAuto = null;
+  // If group size changed, remove old header and re-create
+  var isRebuild = false;
   if (headerExists) {
-    prevAuto = existingHeader.getAttribute('data-dsao-tg-auto');
     var oldSize = parseInt(existingHeader.getAttribute('data-dsao-tg-size') || '0', 10);
     if (oldSize !== group.length) {
       existingHeader.parentNode.removeChild(existingHeader);
       headerExists = false;
+      isRebuild = true;
     }
   }
 
@@ -392,25 +410,34 @@ function applyGroup(group) {
     header.setAttribute('data-dsao-tg-size', String(group.length));
     first.parentNode.insertBefore(header, first);
 
-    // Bind toggle — user clicks always override auto state
-    var toggleFn = function () { toggleGroup(header, group); };
-    header.addEventListener('click', function (e) { e.stopPropagation(); toggleFn(); });
+    // Bind toggle — query live DOM at click time to avoid stale closure.
+    // The header element persists across scans (else branch), but group
+    // item references may change when React re-renders (e.g. bash terminal).
+    // So we walk forward from the header at toggle time to find current items.
+    header.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var liveGroup = collectGroupFromHeader(header);
+      if (liveGroup.length >= 2) toggleGroup(header, liveGroup);
+    });
     header.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); toggleFn(); }
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault(); e.stopPropagation();
+        var liveGroup = collectGroupFromHeader(header);
+        if (liveGroup.length >= 2) toggleGroup(header, liveGroup);
+      }
     });
 
     // Initial state:
-    // - Recreation (prevAuto set): preserve previous lifecycle, always expand.
-    //   manageLatestGroup will collapse if needed — avoids flicker from
-    //   momentary all-done window between fast tools.
-    // - First creation: expand if running, collapse if not (historical groups).
-    var autoToSet = prevAuto !== null ? prevAuto : (isGroupRunning(group) ? 'running' : 'collapsed');
-    if (autoToSet === 'running') {
+    // - Rebuild (size changed): always expand — manageLatestGroup will
+    //   collapse if needed. Avoids flicker from momentary all-done window.
+    // - First creation: expand if running, collapse if not (historical groups
+    //   default collapsed on page refresh per user requirement).
+    var shouldExpand = isRebuild || isGroupRunning(group);
+    if (shouldExpand) {
       applyExpand(header, group);
     } else {
       applyCollapse(header, group);
     }
-    header.setAttribute('data-dsao-tg-auto', autoToSet);
   } else {
     // Header exists and size matches — ensure collapse DOM consistency only.
     // Do NOT change the logical state here; manageLatestGroup handles that.
@@ -468,18 +495,14 @@ function hasContentAfterGroup(group) {
 // ── Auto-manage latest group ──────────────────────────────────────────────
 
 /**
- * Manage the expand/collapse lifecycle of the LATEST group only.
+ * Auto-manage expand/collapse for the latest group ONLY.
+ * Purely condition-driven — no state machine, no lifecycle tracking.
  *
  * Rules:
- * 1. If the latest group has running tools → keep expanded.
- * 2. When all tools finish (running → done) → wait for new content.
- * 3. When new content arrives after a "done" group → auto-collapse.
- * 4. Older groups are never touched here — user controls them manually.
- *
- * The lifecycle is tracked via data-dsao-tg-auto:
- *   "running" → tools in-flight, always expanded
- *   "done"    → tools finished, waiting for new content to collapse
- *   "collapsed" → auto-collapsed or initially done, no further action
+ * 1. Any tool running → expand.
+ * 2. All tools done + non-groupable content after group → collapse.
+ * 3. Otherwise → leave as-is (respect manual toggle / initial state).
+ * 4. Older groups are never touched here.
  */
 function manageLatestGroup(groups) {
   if (!groups || groups.length === 0) return;
@@ -489,29 +512,19 @@ function manageLatestGroup(groups) {
   if (!header || !header.getAttribute ||
       header.getAttribute('data-dsao-tg-header') !== '') return;
 
-  var running = isGroupRunning(latestGroup);
-
-  if (running) {
-    // Rule 1: keep expanded while any tool is running
+  if (isGroupRunning(latestGroup)) {
     if (header.getAttribute('data-dsao-tg-state') === 'collapsed') {
       applyExpand(header, latestGroup);
     }
-    header.setAttribute('data-dsao-tg-auto', 'running');
     return;
   }
 
-  var autoState = header.getAttribute('data-dsao-tg-auto') || 'collapsed';
-
-  // Already auto-collapsed → user controls now, don't touch
-  if (autoState === 'collapsed') return;
-
-  // auto='running' but tools are done — delay collapse until genuinely
-  // new non-groupable content appears after the group.
+  // All tools done — only collapse when non-groupable content follows.
   if (hasContentAfterGroup(latestGroup)) {
-    applyCollapse(header, latestGroup);
-    header.setAttribute('data-dsao-tg-auto', 'collapsed');
+    if (header.getAttribute('data-dsao-tg-state') !== 'collapsed') {
+      applyCollapse(header, latestGroup);
+    }
   }
-  // else: stay expanded, keep waiting
 }
 
 /**
