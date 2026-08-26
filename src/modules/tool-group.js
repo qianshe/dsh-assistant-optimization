@@ -370,8 +370,10 @@ function applyGroup(group) {
   var headerExists = existingHeader && existingHeader.getAttribute &&
     existingHeader.getAttribute('data-dsao-tg-header') === '';
 
-  // If group size changed, remove old header and re-create
+  // Save auto state before potential header removal (size change)
+  var prevAuto = null;
   if (headerExists) {
+    prevAuto = existingHeader.getAttribute('data-dsao-tg-auto');
     var oldSize = parseInt(existingHeader.getAttribute('data-dsao-tg-size') || '0', 10);
     if (oldSize !== group.length) {
       existingHeader.parentNode.removeChild(existingHeader);
@@ -397,15 +399,18 @@ function applyGroup(group) {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); toggleFn(); }
     });
 
-    // Initial state: expanded if running, collapsed otherwise.
-    // Auto-state tracks the lifecycle: running → done → collapsed.
-    if (isGroupRunning(group)) {
+    // Initial state:
+    // - Recreation (prevAuto set): preserve previous lifecycle, always expand.
+    //   manageLatestGroup will collapse if needed — avoids flicker from
+    //   momentary all-done window between fast tools.
+    // - First creation: expand if running, collapse if not (historical groups).
+    var autoToSet = prevAuto !== null ? prevAuto : (isGroupRunning(group) ? 'running' : 'collapsed');
+    if (autoToSet === 'running') {
       applyExpand(header, group);
-      header.setAttribute('data-dsao-tg-auto', 'running');
     } else {
       applyCollapse(header, group);
-      header.setAttribute('data-dsao-tg-auto', 'collapsed');
     }
+    header.setAttribute('data-dsao-tg-auto', autoToSet);
   } else {
     // Header exists and size matches — ensure collapse DOM consistency only.
     // Do NOT change the logical state here; manageLatestGroup handles that.
@@ -495,18 +500,18 @@ function manageLatestGroup(groups) {
     return;
   }
 
-  // All tools done — check lifecycle state
   var autoState = header.getAttribute('data-dsao-tg-auto') || 'collapsed';
 
-  if (autoState === 'running') {
-    header.setAttribute('data-dsao-tg-auto', 'done');
-    return;
-  }
+  // Already auto-collapsed → user controls now, don't touch
+  if (autoState === 'collapsed') return;
 
-  if (autoState === 'done' && hasContentAfterGroup(latestGroup)) {
+  // auto='running' but tools are done — delay collapse until genuinely
+  // new non-groupable content appears after the group.
+  if (hasContentAfterGroup(latestGroup)) {
     applyCollapse(header, latestGroup);
     header.setAttribute('data-dsao-tg-auto', 'collapsed');
   }
+  // else: stay expanded, keep waiting
 }
 
 /**
