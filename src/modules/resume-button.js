@@ -14,20 +14,22 @@
 //   - 盖面位置随轮询/resize/MutationObserver 三路刷新，幂等清理；
 //   - 其余场景盖面隐藏，官方按钮完全原样（FR-2 仲裁不变）。
 //
-// 文案对（PRD FR-10）：zh「断点续发」/「正在续跑…」。
+// 悬浮提示已按需求移除（v1.6.2 项3）；错误反馈仅保留按钮态闪烁。
 
 var RESUME_ENDPOINT = '/api/dsao/resume'
 var SVG_NS = 'http://www.w3.org/2000/svg'
-var TITLE_IDLE_DETAIL = '上次输出已中断，点击从头重跑那次调用'
 var PATH_PLAY = 'M6 4.2v7.6l6.4-3.8z'
 
 function ensureStyles(doc) {
 	if (doc.getElementById('dsao-resume-css') !== null) return
 	var style = doc.createElement('style')
 	style.id = 'dsao-resume-css'
+	// 与官方 Button（_button_kz6gm / _primary_kz6gm）同款皮肤：
+	// 主色填充 + hover 变体 + 同级圆角；点击态跟随禁用语义。
 	style.textContent = [
-		'[data-dsao-resume-overlay]{position:absolute;z-index:30;border:none;margin:0;padding:0;display:none;align-items:center;justify-content:center;background:var(--dsw-alias-brand-primary);color:#fff;border-radius:10px;cursor:pointer;}',
-		'[data-dsao-resume-overlay]:hover{filter:brightness(1.08);}',
+		'[data-dsao-resume-overlay]{position:absolute;z-index:30;border:none;margin:0;padding:0;display:none;align-items:center;justify-content:center;background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground);border-radius:18px;cursor:pointer;}',
+		'[data-dsao-resume-overlay]:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover);}',
+		'[data-dsao-resume-overlay]:disabled{cursor:not-allowed;opacity:.4;}',
 	].join('\n')
 	doc.head.appendChild(style)
 }
@@ -82,7 +84,6 @@ function createResumeButton(React, gateMod) {
 			overlay.type = 'button'
 			overlay.setAttribute('data-dsao-resume-overlay', '')
 			overlay.setAttribute('aria-label', '断点续发')
-			overlay.title = TITLE_IDLE_DETAIL
 
 			var svg = doc.createElementNS(SVG_NS, 'svg')
 			svg.setAttribute('viewBox', '0 0 16 16')
@@ -117,7 +118,6 @@ function createResumeButton(React, gateMod) {
 				clearSettle()
 				busy = false
 				overlay.disabled = false
-				overlay.title = TITLE_IDLE_DETAIL
 			}
 
 			function requestResume(sessionId) {
@@ -146,13 +146,9 @@ function createResumeButton(React, gateMod) {
 				if (sessionId === '') return
 				busy = true
 				overlay.disabled = true
-				overlay.title = '正在续跑…'
 				requestResume(sessionId).then(function () {
-					overlay.title = '已接管，续跑中…'
 					settleTimer = setTimeout(function () { renderIdle(); poll() }, 1200)
 				}).catch(function (err) {
-					var why = err && err.message ? err.message : String(err)
-					overlay.title = '续发失败：' + why
 					settleTimer = setTimeout(function () { renderIdle(); poll() }, 2600)
 				})
 			})

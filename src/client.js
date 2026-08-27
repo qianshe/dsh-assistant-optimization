@@ -84,12 +84,24 @@ function apply(ctx) {
     );
   });
 
-  // 3b. 断点续发播放键：同槽位兄弟节点（order 101），门控点亮、点击调用
-  //     /api/dsao/resume 免输入唤醒（PRD §14 Phase 2）。
+  // 3b. 断点续发播放键：发送键内嵌覆盖面（门控点亮时发送键本体变 ▶），
+  //     点击调用 /api/dsao/resume 免输入唤醒（PRD §14 Phase 2）。
   slots.inject("conversation.input.right", function () {
     return slots.register(
       { name: "conversation.input.right", id: "dsao-resume", order: 101, locale: "conversation" },
       ResumeMount
+    );
+  });
+
+  // 3c. 续跑行呈现：遮蔽 key:'user' 的官方渲染器，把续跑 marker 的空块
+  //     用户消息渲染为「已从中断处继续」内联提示（项2 空白行 + 项4 连续性）。
+  resumeContinuity.provideSlots(slots);
+  slots.inject("conversation.chat.node", function () {
+    return slots.register(
+      { name: "conversation.chat.node", key: "user", priority: -1, locale: "conversation" },
+      function (rawProps) {
+        return React.createElement(resumeContinuity.ResumeMarkerAwareUserNode, rawProps);
+      }
     );
   });
 
