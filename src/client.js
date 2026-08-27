@@ -110,4 +110,8 @@ function apply(ctx) {
 
   // 5. Tool-call grouping: collapse consecutive tool-call rows into a group
   ctx.effect(function () { return startToolGroupObserver(); });
+
+  // 6. 断点续发行折叠：DOM 层后备，把官方渲染的空 marker 气泡替换为
+  //    「已从中断处继续」提示行（slot 遮蔽未生效时的双保险）。
+  ctx.effect(function () { return resumeContinuity.startResumeHintObserver(); });
 }

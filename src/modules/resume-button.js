@@ -18,17 +18,22 @@
 
 var RESUME_ENDPOINT = '/api/dsao/resume'
 var SVG_NS = 'http://www.w3.org/2000/svg'
-var PATH_PLAY = 'M6 4.2v7.6l6.4-3.8z'
+// Play triangle sized to match official send-arrow visual weight inside 16×16 viewBox.
+var PATH_PLAY = 'M4 3v10l8-5z'
 
 function ensureStyles(doc) {
 	if (doc.getElementById('dsao-resume-css') !== null) return
 	var style = doc.createElement('style')
 	style.id = 'dsao-resume-css'
-	// 与官方 Button（_button_kz6gm / _primary_kz6gm）同款皮肤：
-	// 主色填充 + hover 变体 + 同级圆角；点击态跟随禁用语义。
+	// Exactly mirrors the official .uV2eYG_primary Button skin:
+	//   background: var(--dsw-alias-button-info-fill); color:#fff;
+	//   border-radius:999px; display:grid; place-items:center;
+	//   transition:background-color .1s; transform:translateY(-2px)
+	// The overlay box is sized by primaryBox() to precisely cover the
+	// official button, so we only need to match fill/hover/disabled.
 	style.textContent = [
-		'[data-dsao-resume-overlay]{position:absolute;z-index:30;border:none;margin:0;padding:0;display:none;align-items:center;justify-content:center;background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground);border-radius:18px;cursor:pointer;}',
-		'[data-dsao-resume-overlay]:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover);}',
+		'[data-dsao-resume-overlay]{position:absolute;z-index:30;border:none;margin:0;padding:0;display:none;place-items:center;background:var(--dsw-alias-button-info-fill);color:#fff;border-radius:999px;cursor:pointer;transition:background-color .1s;transform:translateY(-2px);}',
+		'[data-dsao-resume-overlay]:hover:not(:disabled){background:var(--dsw-alias-button-info-hover);}',
 		'[data-dsao-resume-overlay]:disabled{cursor:not-allowed;opacity:.4;}',
 	].join('\n')
 	doc.head.appendChild(style)
