@@ -33,7 +33,9 @@ function lastTerminalKindFromNodes(nodes) {
   var kind = n.kind
   if (kind === 'turn-error') return 'error'
   if (kind === 'turn-max-tokens') return 'max-tokens'
-  if (kind === 'assistant' && n.interrupted === true) return 'aborted'
+  // 中断的助手消息节点 kind 是 'assistant-step'（非 'assistant'），
+  // interrupted 标志挂在 node.data.interrupted 上。
+  if (kind === 'assistant-step' && n.data && n.data.interrupted === true) return 'aborted'
   return undefined
 }
 
