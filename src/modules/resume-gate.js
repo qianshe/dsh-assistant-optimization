@@ -17,7 +17,7 @@
 // 只要看最后一轮的 reason.kind 是否属于可续跑集合即可。
 // 不再依赖 chat.nodes Map、legacy.nodes、interrupted 标志等间接信号。
 
-var RESUMABLE_KINDS = { aborted: true, error: true, 'max-tokens': true }
+var RESUMABLE_KINDS = { aborted: true, error: true }
 
 /**
  * 从 timeline 取最后一轮已关闭 turn 的终止原因 kind。

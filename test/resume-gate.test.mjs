@@ -49,11 +49,11 @@ function makeSession({ timeline, running, queue, subagent } = {}) {
   assert.deepEqual(canResume(s, ''), { canResume: true, terminalKind: 'error' })
 }
 
-// ── 3. Max tokens → resumable ────────────────────────────────────────────
+// ── 3. Max tokens → NOT resumable (treated as error category, not separately) ─
 {
   const tl = makeTimeline(makeTurn(1, 'max-tokens'))
   const s = makeSession({ timeline: tl })
-  assert.deepEqual(canResume(s, ''), { canResume: true, terminalKind: 'max-tokens' })
+  assert.equal(canResume(s, '').canResume, false)
 }
 
 // ── 4. Normal completion → NOT resumable ─────────────────────────────────
