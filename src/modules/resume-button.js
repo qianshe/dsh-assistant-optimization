@@ -19,7 +19,8 @@
 var RESUME_ENDPOINT = '/api/dsao/resume'
 var SVG_NS = 'http://www.w3.org/2000/svg'
 // Play triangle sized to match official send-arrow visual weight inside 16×16 viewBox.
-var PATH_PLAY = 'M4 3v10l8-5z'
+// Official send arrow spans ~x1.3–14.7 / y1–15; play triangle spans ~x3–14 / y2–14.
+var PATH_PLAY = 'M3 2v12l11-6z'
 
 function ensureStyles(doc) {
 	if (doc.getElementById('dsao-resume-css') !== null) return
@@ -32,7 +33,7 @@ function ensureStyles(doc) {
 	// The overlay box is sized by primaryBox() to precisely cover the
 	// official button, so we only need to match fill/hover/disabled.
 	style.textContent = [
-		'[data-dsao-resume-overlay]{position:absolute;z-index:30;border:none;margin:0;padding:0;display:none;place-items:center;background:var(--dsw-alias-button-info-fill);color:#fff;border-radius:999px;cursor:pointer;transition:background-color .1s;transform:translateY(-2px);}',
+		'[data-dsao-resume-overlay]{position:absolute;z-index:30;border:none;margin:0;padding:0;display:none;align-items:center;justify-content:center;place-items:center;background:var(--dsw-alias-button-info-fill);color:#fff;border-radius:999px;cursor:pointer;transition:background-color .1s;transform:translateY(-2px);}',
 		'[data-dsao-resume-overlay]:hover:not(:disabled){background:var(--dsw-alias-button-info-hover);}',
 		'[data-dsao-resume-overlay]:disabled{cursor:not-allowed;opacity:.4;}',
 	].join('\n')
@@ -163,7 +164,7 @@ function createResumeButton(React, gateMod) {
 				if (busy) { place(); return }
 				var verdict = gateMod.canResume(sessionRef.current, draftRef.current)
 				var visible = verdict.canResume === true
-				overlay.style.display = visible ? 'flex' : 'none'
+				overlay.style.display = visible ? 'grid' : 'none'
 				if (visible) place()
 			}
 			var timer = setInterval(poll, 700)
