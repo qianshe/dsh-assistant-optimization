@@ -15,6 +15,22 @@ var HINT_TEXT = '已从中断处继续'
 
 /** 官方 UserMessageNodeView 的发现（同 wrapper.findOfficialRenderer 的手法）。 */
 var _officialUserCache = null
+/** slots 查找器的注入点：主入口拿到 ctx 后把 slots 传进来（缓存一次即可）。 */
+function provideSlots(slots) {
+  _officialUserCache = null
+  try {
+    var entries = slots.entries('conversation.chat.node')
+    if (entries) {
+      for (var i = 0; i < entries.length; i++) {
+        var e = entries[i]
+        if (e.options && e.options.key === 'user' && (e.options.priority ?? 0) === 0) {
+          _officialUserCache = e.component
+          break
+        }
+      }
+    }
+  } catch (err) {}
+}
 function findOfficialUserRenderer(slots) {
   if (_officialUserCache) return _officialUserCache
   try {
@@ -91,30 +107,13 @@ function createResumeContinuity(React) {
     return React.createElement(Official, props)
   }
 
-  /** slots 查找器的注入点：主入口拿到 ctx 后把 slots 传进来（缓存一次即可）。 */
-  function provideSlots(slots) {
-    _officialUserCache = null
-    try {
-      var entries = slots.entries('conversation.chat.node')
-      if (entries) {
-        for (var i = 0; i < entries.length; i++) {
-          var e = entries[i]
-          if (e.options && e.options.key === 'user' && (e.options.priority ?? 0) === 0) {
-            _officialUserCache = e.component
-            break
-          }
-        }
-      }
-    } catch (err) {}
-  }
-
   return {
     ResumeMarkerAwareUserNode: ResumeMarkerAwareUserNode,
-    provideSlots: provideSlots,
   }
 }
 
 exports.createResumeContinuity = createResumeContinuity
 exports.isResumeMarker = isResumeMarker
 exports.findOfficialUserRenderer = findOfficialUserRenderer
+exports.provideSlots = provideSlots
 exports.HINT_TEXT = HINT_TEXT

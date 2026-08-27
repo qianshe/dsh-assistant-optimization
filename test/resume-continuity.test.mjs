@@ -27,8 +27,7 @@ assert.equal(m.HINT_TEXT, '已从中断处继续')
 // 5. Shadow component branch: marker renders the hint node; ordinary row with
 //    no official renderer found returns null (never crashes the chat flow).
 {
-  const R = m.createResumeContinuity({ createElement: (type, props) => ({ type, props }) })
-  const Comp = R.ResumeMarkerAwareUserNode
+  const Comp = m.createResumeContinuity({ createElement: (type, props) => ({ type, props }) }).ResumeMarkerAwareUserNode
   const markerOut = Comp({ node: { data: { content: [], source: { kind: 'user', dsaoResume: true } } } })
   assert.equal(markerOut.type, 'div')
   assert.equal(markerOut.props['data-dsao-resume-hint'], '')
@@ -44,7 +43,7 @@ assert.equal(m.HINT_TEXT, '已从中断处继续')
       { options: { key: 'user', priority: 0 }, component: official },
     ],
   }
-  m.createResumeContinuity({}).provideSlots(slots)
+  m.provideSlots(slots)
   const found = m.findOfficialUserRenderer(slots)
   assert.equal(found, official)
 }
