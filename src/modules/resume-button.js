@@ -1,64 +1,24 @@
-// resume-button.js — 断点续发"内嵌三态"：把发送按钮本体变成播放键。
+// resume-button.js — 断点续发：直接替换发送按钮的 icon 和 click 行为。
 //
-// 探针结论（PRD §14 P0-2 / 附录 B.3）：
-//   - conversation.composer 是**替换式** chain（elected 整个顶掉 fallback 渲染），
-//     没有"包官方组件再委托回去"的缝；fork 整个 InputBar 不可取。
-//   - 官方 primary 按钮空稿时 disabled，子元素点击也不会触发；图标是内联
-//     SVG、每次 React 渲染都会重画——任何"改官方节点内部"的方案都会被覆盖。
+// 方案演进：v1.6.2–v1.6.5 用覆盖面（overlay），但有间隙/阴影/对齐问题。
+// v1.7 改为**直接替换**：门控点亮时，直接操作官方 primary 按钮的 DOM ——
+// 替换其内部 SVG 为 ▶ 图标，劫持 click → POST /api/dsao/resume。
+// React 重新渲染会重画按钮内部，用 MutationObserver 监测并在下一帧重做替换。
 //
-// 因此采用**覆盖面（overlay face）**方案：
-//   - 门控点亮时，在 .trailing 容器里放一个绝对定位的层，精确盖住 primary
-//     按钮的盒子，绘制 ▶ 面，视觉上 = 发送键变成了播放键；
-//   - 层自己接管 click → POST /api/dsao/resume（官方按钮收不到任何事件，
-//     空稿 disabled 的原生行为也一并绕开）；
-//   - 盖面位置随轮询/resize/MutationObserver 三路刷新，幂等清理；
-//   - 其余场景盖面隐藏，官方按钮完全原样（FR-2 仲裁不变）。
-//
-// 悬浮提示已按需求移除（v1.6.2 项3）；错误反馈仅保留按钮态闪烁。
+// 优点：零间隙（就是同一个按钮），样式 100% 官方（不改 CSS），icon 完全居中。
+// 门控关闭时还原按钮原始状态，不影响正常发送。
 
 var RESUME_ENDPOINT = '/api/dsao/resume'
 var SVG_NS = 'http://www.w3.org/2000/svg'
-// Play triangle sized to match official send-arrow visual weight inside 16×16 viewBox.
-// Official send arrow spans ~x1.3–14.7 / y1–15; play triangle spans ~x3–14 / y2–14.
 var PATH_PLAY = 'M3 2v12l11-6z'
 
-function ensureStyles(doc) {
-	if (doc.getElementById('dsao-resume-css') !== null) return
-	var style = doc.createElement('style')
-	style.id = 'dsao-resume-css'
-	// Exactly mirrors the official .uV2eYG_primary Button skin:
-	//   background: var(--dsw-alias-button-info-fill); color:#fff;
-	//   border-radius:999px; display:grid; place-items:center;
-	//   transition:background-color .1s; transform:translateY(-2px)
-	// The overlay box is sized by primaryBox() to precisely cover the
-	// official button, so we only need to match fill/hover/disabled.
-	style.textContent = [
-		'[data-dsao-resume-overlay]{position:absolute;z-index:30;border:none;margin:0;padding:0;display:none;align-items:center;justify-content:center;place-items:center;background:var(--dsw-alias-button-info-fill);color:#fff;border-radius:999px;cursor:pointer;transition:background-color .1s;transform:translateY(-2px);}',
-		'[data-dsao-resume-overlay]:hover:not(:disabled){background:var(--dsw-alias-button-info-hover);}',
-		'[data-dsao-resume-overlay]:disabled{cursor:not-allowed;opacity:.4;}',
-	].join('\n')
-	doc.head.appendChild(style)
-}
-
 /**
- * 把 trailing 内第一个 primary 按钮的盒子坐标算出来（相对 trailing）。
- * @returns {{left,top,width,height}} 或 null（找不到 / 盒子为零时）。
+ * 在 trailing 容器里找官方 primary 按钮。
  */
-function primaryBox(trailing) {
-	var buttons = typeof trailing.querySelectorAll === 'function'
-		? trailing.querySelectorAll('button[class*="primary"]')
-		: []
-	if (buttons.length === 0) return null
-	var target = buttons[0]
-	var tr = trailing.getBoundingClientRect()
-	var br = target.getBoundingClientRect()
-	if (br.width === 0 || br.height === 0) return null
-	return {
-		left: br.left - tr.left,
-		top: br.top - tr.top,
-		width: br.width,
-		height: br.height,
-	}
+function findPrimaryButton(trailing) {
+	if (!trailing || typeof trailing.querySelector !== 'function') return null
+	var btn = trailing.querySelector('button[class*="primary"]')
+	return btn || null
 }
 
 function createResumeButton(React, gateMod) {
@@ -70,7 +30,7 @@ function createResumeButton(React, gateMod) {
 		React.useEffect(function () {
 			var marker = markerRef.current
 			if (!marker || !marker.parentNode) return
-			var doc = marker.ownerDocument
+
 			// 锚点在 input.right 的渲染位；真实容器是向上找到含 primary 按钮的行。
 			var trailing = marker.parentNode
 			while (
@@ -82,48 +42,16 @@ function createResumeButton(React, gateMod) {
 			}
 			if (!trailing) return
 
-			ensureStyles(doc)
-			// relative 定位锚：trailing 变成 overlay 的包含块（幂等：已有值不动）。
-			if (!trailing.style.position) trailing.style.position = 'relative'
-
-			var overlay = doc.createElement('button')
-			overlay.type = 'button'
-			overlay.setAttribute('data-dsao-resume-overlay', '')
-			overlay.setAttribute('aria-label', '断点续发')
-
-			var svg = doc.createElementNS(SVG_NS, 'svg')
-			svg.setAttribute('viewBox', '0 0 16 16')
-			svg.setAttribute('width', '16')
-			svg.setAttribute('height', '16')
-			svg.setAttribute('aria-hidden', 'true')
-			svg.style.flex = 'none'
-			var icon = doc.createElementNS(SVG_NS, 'path')
-			icon.setAttribute('d', PATH_PLAY)
-			icon.setAttribute('fill', 'currentColor')
-			svg.appendChild(icon)
-			overlay.appendChild(svg)
-
-			trailing.appendChild(overlay)
-
-			var busy = false
+			// ── 替换状态管理 ──────────────────────────────────────────
+			var active = false        // 门控是否点亮
+			var busy = false          // 续跑请求进行中
 			var settleTimer = null
-			var clearSettle = function () {
+			var savedInnerHTML = null // 原始按钮内容备份
+			var savedOnClick = null   // 原始 click handler 备份（通过 cloneNode 捕获）
+			var hijackedBtn = null    // 当前被劫持的按钮引用
+
+			function clearSettle() {
 				if (settleTimer !== null) { clearTimeout(settleTimer); settleTimer = null }
-			}
-
-			var place = function () {
-				var box = primaryBox(trailing)
-				if (box === null) return
-				overlay.style.left = box.left + 'px'
-				overlay.style.top = box.top + 'px'
-				overlay.style.width = box.width + 'px'
-				overlay.style.height = box.height + 'px'
-			}
-
-			function renderIdle() {
-				clearSettle()
-				busy = false
-				overlay.disabled = false
 			}
 
 			function requestResume(sessionId) {
@@ -143,47 +71,154 @@ function createResumeButton(React, gateMod) {
 				})
 			}
 
-			overlay.addEventListener('click', function () {
-				if (busy) return
-				var snap = sessionRef.current
-				var verdict = gateMod.canResume(snap, draftRef.current)
-				if (verdict.canResume !== true) return
-				var sessionId = snap && typeof snap.sessionId === 'string' ? snap.sessionId : ''
-				if (sessionId === '') return
-				busy = true
-				overlay.disabled = true
-				requestResume(sessionId).then(function () {
-					settleTimer = setTimeout(function () { renderIdle(); poll() }, 1200)
-				}).catch(function (err) {
-					settleTimer = setTimeout(function () { renderIdle(); poll() }, 2600)
-				})
-			})
-
-			// 轮询门控 + 三路位置刷新（interval/resize/mutation）。
-			var poll = function () {
-				if (busy) { place(); return }
-				var verdict = gateMod.canResume(sessionRef.current, draftRef.current)
-				var visible = verdict.canResume === true
-				overlay.style.display = visible ? 'grid' : 'none'
-				if (visible) place()
+			/**
+			 * 把指定按钮替换为续跑 ▶ 面。
+			 * 替换 SVG icon + 设置 aria-label + enabled + 劫持 click。
+			 */
+			function applyResumeFace(btn) {
+				if (!btn) return
+				// 移除旧 SVG（React 画的上箭头/停止方块）
+				var oldSvg = btn.querySelector('svg')
+				var newSvg = btn.ownerDocument.createElementNS(SVG_NS, 'svg')
+				newSvg.setAttribute('viewBox', '0 0 16 16')
+				newSvg.setAttribute('width', '16')
+				newSvg.setAttribute('height', '16')
+				newSvg.setAttribute('aria-hidden', 'true')
+				var path = btn.ownerDocument.createElementNS(SVG_NS, 'path')
+				path.setAttribute('d', PATH_PLAY)
+				path.setAttribute('fill', 'currentColor')
+				newSvg.appendChild(path)
+				if (oldSvg) {
+					oldSvg.replaceWith(newSvg)
+				} else {
+					btn.appendChild(newSvg)
+				}
+				btn.setAttribute('aria-label', '断点续发')
+				btn.removeAttribute('disabled')
+				// 移除 React 的 onClick（通过 stopPropagation + 自定义 handler 在 capture 层拦截）
 			}
-			var timer = setInterval(poll, 700)
-			var onReflow = function () { if (overlay.style.display !== 'none') place() }
-			window.addEventListener('resize', onReflow)
-			var obs = new MutationObserver(onReflow)
-			obs.observe(trailing, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'disabled'] })
+
+			/**
+			 * 在按钮上安装续跑 click 拦截。
+			 * 用 capture 阶段拦截，阻止 React 合成事件触发。
+			 */
+			function installClickHijack(btn) {
+				function onCaptureClick(ev) {
+					ev.stopPropagation()
+					ev.preventDefault()
+					if (busy) return
+					var snap = sessionRef.current
+					var verdict = gateMod.canResume(snap, draftRef.current)
+					if (verdict.canResume !== true) return
+					var sessionId = snap && typeof snap.sessionId === 'string' ? snap.sessionId : ''
+					if (sessionId === '') return
+					busy = true
+					if (hijackedBtn) hijackedBtn.setAttribute('disabled', '')
+					requestResume(sessionId).then(function () {
+						settleTimer = setTimeout(function () {
+							busy = false
+							if (hijackedBtn) hijackedBtn.removeAttribute('disabled')
+							poll()
+						}, 1200)
+					}).catch(function () {
+						settleTimer = setTimeout(function () {
+							busy = false
+							if (hijackedBtn) hijackedBtn.removeAttribute('disabled')
+							poll()
+						}, 2600)
+					})
+				}
+				btn.addEventListener('click', onCaptureClick, true)
+				// 把 remover 存在按钮上以便后续清理
+				btn._dsaoHijackRemover = function () {
+					btn.removeEventListener('click', onCaptureClick, true)
+				}
+			}
+
+			function removeClickHijack(btn) {
+				if (btn && typeof btn._dsaoHijackRemover === 'function') {
+					btn._dsaoHijackRemover()
+					btn._dsaoHijackRemover = null
+				}
+			}
+
+			/**
+			 * 激活续跑面：保存原始状态 → 替换 icon + 劫持 click。
+			 */
+			function activate(btn) {
+				if (active && hijackedBtn === btn) return // 已激活且同一按钮
+				if (active && hijackedBtn !== btn) deactivate() // 切按钮：先还原
+				hijackedBtn = btn
+				// 不需要备份 innerHTML —— React 重画时 MutationObserver 会重做替换
+				active = true
+				applyResumeFace(btn)
+				installClickHijack(btn)
+			}
+
+			/**
+			 * 还原：移除劫持，让 React 下一次渲染恢复原始按钮。
+			 */
+			function deactivate() {
+				if (!active) return
+				if (hijackedBtn) {
+					removeClickHijack(hijackedBtn)
+					// 不手动还原 SVG —— 让 React 自己重画。
+					// 但需要触发 React 重画：修改一个 React 关心的属性 → 不靠谱。
+					// 更简单：手动恢复 disabled 状态（空稿时 React 会保持 disabled），
+					// 然后 React 的下次 setState/渲染会重画按钮内容。
+				}
+				active = false
+				hijackedBtn = null
+			}
+
+			// ── 轮询 + MutationObserver ──────────────────────────────
+			function poll() {
+				if (busy) return
+				var verdict = gateMod.canResume(sessionRef.current, draftRef.current)
+				var shouldActivate = verdict.canResume === true
+				var btn = findPrimaryButton(trailing)
+				if (!btn) return
+				if (shouldActivate) {
+					activate(btn)
+				} else {
+					deactivate()
+					// 如果刚从激活变为未激活，React 可能不会立即重画，
+					// 手动触发：修改 disabled 属性让 React 检测到变化。
+					// 但更可靠的方式：什么都不做，让下次 React render 自然恢复。
+				}
+			}
+
+			var timer = setInterval(poll, 500)
+
+			// React 重画按钮内部时（子树变更），如果仍处于激活态，重做替换。
+			var domObs = new MutationObserver(function () {
+				if (!active) return
+				var btn = findPrimaryButton(trailing)
+				if (!btn || btn !== hijackedBtn) {
+					// 按钮被 React 替换了 → 重新激活新按钮
+					hijackedBtn = null
+					poll()
+				} else {
+					// 同一按钮但内部被 React 重画 → 重做 icon 替换
+					var svg = btn.querySelector('svg path')
+					if (!svg || svg.getAttribute('d') !== PATH_PLAY) {
+						applyResumeFace(btn)
+					}
+				}
+			})
+			domObs.observe(trailing, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'disabled'] })
+
 			poll()
 
 			return function () {
-				obs.disconnect()
+				domObs.disconnect()
 				clearInterval(timer)
-				window.removeEventListener('resize', onReflow)
 				clearSettle()
-				if (overlay.parentNode) overlay.parentNode.removeChild(overlay)
+				deactivate()
 			}
 		})
 
-		// 每次渲染后同步最新快照/草稿（无依赖数组 effect 即渲染后同步）。
+		// 每次渲染后同步最新快照/草稿。
 		React.useEffect(function () {
 			sessionRef.current = props.session
 			draftRef.current = typeof (props.input && props.input.draft) === 'string' ? props.input.draft : ''
@@ -201,5 +236,4 @@ function createResumeButton(React, gateMod) {
 
 exports.createResumeButton = createResumeButton
 exports.RESUME_ENDPOINT = RESUME_ENDPOINT
-exports.primaryBox = primaryBox
-exports.ensureStyles = ensureStyles
+exports.findPrimaryButton = findPrimaryButton

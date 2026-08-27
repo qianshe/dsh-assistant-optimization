@@ -76,10 +76,16 @@ function isResumeMarker(node) {
 // ── DOM-layer fallback (mechanism B) ──────────────────────────────────────
 
 /**
- * MutationObserver 扫描对话流，把空的用户消息气泡替换为「已从中断处继续」提示行。
+ * MutationObserver 扫描对话流，把空的续跑 marker 行替换为「已从中断处继续」提示。
  *
- * 判定逻辑：用户消息行（.gdEzaW_userRow）内的气泡（.gdEzaW_bubble）为空
- * （无文本、无子元素，或仅含空白文本节点）→ 视为续跑 marker 行。
+ * 当 content 为空时，官方 UserStyleBubble 的 showBubble=false，
+ * 不渲染 .gdEzaW_bubble 元素——行结构变为：
+ *   .gdEzaW_userRow
+ *     .gdEzaW_userStack（空：无 bubble、无 image、无 reference）
+ *     .p-xYUq_actions（复制按钮 + 时间）
+ *
+ * 判定逻辑：userRow 内不含 .gdEzaW_bubble 且 userStack 文本为空
+ *           → 视为续跑 marker 行（正常用户消息总有 bubble 或至少有内容）。
  * 已处理过的行带 data-dsao-resume-collapsed 属性，跳过。
  *
  * @returns 清理函数（断开 observer）。
@@ -87,19 +93,24 @@ function isResumeMarker(node) {
 function startResumeHintObserver() {
   if (typeof document === 'undefined') return function () {}
 
-  var BUBBLE_SEL = '.gdEzaW_bubble'
   var ROW_SEL = '.gdEzaW_userRow'
+  var BUBBLE_SEL = '.gdEzaW_bubble'
+  var STACK_SEL = '.gdEzaW_userStack'
 
   function processRow(row) {
     if (!row || row.hasAttribute('data-dsao-resume-collapsed')) return
+    // 有 bubble → 正常用户消息（即使 bubble 内容空也是 React 渲染了的）。
     var bubble = row.querySelector(BUBBLE_SEL)
-    if (!bubble) return
+    if (bubble) return
+    // userStack 必须存在且无可见文本内容。
+    var stack = row.querySelector(STACK_SEL)
+    if (!stack) return
+    var stackText = String(stack.textContent || '').trim()
+    if (stackText !== '') return
+    // stack 内不能有图片（images）。
+    if (stack.querySelector('img')) return
 
-    // 气泡是否"空"：无子元素且文本空白。
-    var isEmpty = bubble.children.length === 0 && String(bubble.textContent || '').trim() === ''
-    if (!isEmpty) return
-
-    // 标记已处理。
+    // 确认是 marker 行：标记已处理。
     row.setAttribute('data-dsao-resume-collapsed', '')
 
     // 用提示行替换整个用户行的内容。
@@ -128,7 +139,7 @@ function startResumeHintObserver() {
     hint.appendChild(line)
     hint.appendChild(document.createTextNode(HINT_TEXT))
 
-    // 清空原行内容，插入提示。
+    // 清空原行内容（含 actions/复制按钮），插入提示。
     while (row.firstChild) row.removeChild(row.firstChild)
     row.appendChild(hint)
     // 行容器不再右对齐（否则提示浮在右侧很怪），改为左侧自然流。
