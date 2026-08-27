@@ -1,20 +1,29 @@
 // resume-button.js — 断点续发：直接替换发送按钮的 icon 和 click 行为。
 //
-// 方案演进：v1.6.2–v1.6.5 用覆盖面（overlay），但有间隙/阴影/对齐问题。
-// v1.7 改为**直接替换**：门控点亮时，直接操作官方 primary 按钮的 DOM ——
-// 替换其内部 SVG 为 ▶ 图标，劫持 click → POST /api/dsao/resume。
-// React 重新渲染会重画按钮内部，用 MutationObserver 监测并在下一帧重做替换。
+// v1.6.6 改为直接替换 SVG，但 React reconciliation 不感知 DOM 修改，
+// deactivate() 后原始 icon 无法可靠还原（输入内容 / 完成续跑后按钮卡在 ▶）。
 //
-// 优点：零间隙（就是同一个按钮），样式 100% 官方（不改 CSS），icon 完全居中。
-// 门控关闭时还原按钮原始状态，不影响正常发送。
+// v1.6.8 改为 **CSS 叠加**策略：
+//   - 激活时：给按钮加 data-dsao-resume 属性 + 追加一个 data-dsao-play SVG。
+//     CSS 规则 [data-dsao-resume] > svg:not([data-dsao-play]) { display:none }
+//     隐藏官方 icon，播放 icon 可见。
+//   - 关闭时：移除 data-dsao-resume 属性 + 移除播放 SVG。
+//     官方 icon 立即恢复（CSS 不再隐藏），React 无需重新渲染。
+//   - 不修改官方 SVG 的任何属性 → React reconciliation 完全不受干扰。
 
 var RESUME_ENDPOINT = '/api/dsao/resume'
 var SVG_NS = 'http://www.w3.org/2000/svg'
 var PATH_PLAY = 'M3 2v12l11-6z'
 
-/**
- * 在 trailing 容器里找官方 primary 按钮。
- */
+function ensureStyles(doc) {
+	if (doc.getElementById('dsao-resume-btn-css') !== null) return
+	var style = doc.createElement('style')
+	style.id = 'dsao-resume-btn-css'
+	// 激活时隐藏官方 icon（第一个 svg），播放 icon（data-dsao-play）不受影响。
+	style.textContent = '[data-dsao-resume] > svg:not([data-dsao-play]){display:none}'
+	doc.head.appendChild(style)
+}
+
 function findPrimaryButton(trailing) {
 	if (!trailing || typeof trailing.querySelector !== 'function') return null
 	var btn = trailing.querySelector('button[class*="primary"]')
@@ -30,8 +39,8 @@ function createResumeButton(React, gateMod) {
 		React.useEffect(function () {
 			var marker = markerRef.current
 			if (!marker || !marker.parentNode) return
+			var doc = marker.ownerDocument
 
-			// 锚点在 input.right 的渲染位；真实容器是向上找到含 primary 按钮的行。
 			var trailing = marker.parentNode
 			while (
 				trailing &&
@@ -42,13 +51,12 @@ function createResumeButton(React, gateMod) {
 			}
 			if (!trailing) return
 
-			// ── 替换状态管理 ──────────────────────────────────────────
-			var active = false        // 门控是否点亮
-			var busy = false          // 续跑请求进行中
+			ensureStyles(doc)
+
+			var active = false
+			var busy = false
 			var settleTimer = null
-			var savedInnerHTML = null // 原始按钮内容备份
-			var savedOnClick = null   // 原始 click handler 备份（通过 cloneNode 捕获）
-			var hijackedBtn = null    // 当前被劫持的按钮引用
+			var hijackedBtn = null
 
 			function clearSettle() {
 				if (settleTimer !== null) { clearTimeout(settleTimer); settleTimer = null }
@@ -72,37 +80,54 @@ function createResumeButton(React, gateMod) {
 			}
 
 			/**
-			 * 把指定按钮替换为续跑 ▶ 面。
-			 * 替换 SVG icon + 设置 aria-label + enabled + 劫持 click。
+			 * 激活：标记按钮 + 追加播放 SVG + 安装 click 拦截。
+			 * 幂等：已有 play SVG 不重复添加。
 			 */
-			function applyResumeFace(btn) {
+			function activate(btn) {
 				if (!btn) return
-				// 移除旧 SVG（React 画的上箭头/停止方块）
-				var oldSvg = btn.querySelector('svg')
-				var newSvg = btn.ownerDocument.createElementNS(SVG_NS, 'svg')
-				newSvg.setAttribute('viewBox', '0 0 16 16')
-				newSvg.setAttribute('width', '16')
-				newSvg.setAttribute('height', '16')
-				newSvg.setAttribute('aria-hidden', 'true')
-				var path = btn.ownerDocument.createElementNS(SVG_NS, 'path')
-				path.setAttribute('d', PATH_PLAY)
-				path.setAttribute('fill', 'currentColor')
-				newSvg.appendChild(path)
-				if (oldSvg) {
-					oldSvg.replaceWith(newSvg)
-				} else {
-					btn.appendChild(newSvg)
-				}
+				if (active && hijackedBtn === btn) return
+				if (active && hijackedBtn !== btn) deactivate()
+				hijackedBtn = btn
+				active = true
+				btn.setAttribute('data-dsao-resume', '')
 				btn.setAttribute('aria-label', '断点续发')
 				btn.removeAttribute('disabled')
-				// 移除 React 的 onClick（通过 stopPropagation + 自定义 handler 在 capture 层拦截）
+				// 追加播放 SVG（幂等）。
+				if (!btn.querySelector('svg[data-dsao-play]')) {
+					var playSvg = doc.createElementNS(SVG_NS, 'svg')
+					playSvg.setAttribute('viewBox', '0 0 16 16')
+					playSvg.setAttribute('width', '16')
+					playSvg.setAttribute('height', '16')
+					playSvg.setAttribute('aria-hidden', 'true')
+					playSvg.setAttribute('data-dsao-play', '')
+					var path = doc.createElementNS(SVG_NS, 'path')
+					path.setAttribute('d', PATH_PLAY)
+					path.setAttribute('fill', 'currentColor')
+					playSvg.appendChild(path)
+					btn.appendChild(playSvg)
+				}
+				installClickHijack(btn)
 			}
 
 			/**
-			 * 在按钮上安装续跑 click 拦截。
-			 * 用 capture 阶段拦截，阻止 React 合成事件触发。
+			 * 关闭：移除标记 + 移除播放 SVG + 移除 click 拦截。
+			 * 官方 icon 因 CSS 规则不再适用而立即恢复可见——无需 React 重新渲染。
 			 */
+			function deactivate() {
+				if (!active) return
+				if (hijackedBtn) {
+					removeClickHijack(hijackedBtn)
+					hijackedBtn.removeAttribute('data-dsao-resume')
+					hijackedBtn.removeAttribute('aria-label')
+					var playSvg = hijackedBtn.querySelector('svg[data-dsao-play]')
+					if (playSvg) playSvg.remove()
+				}
+				active = false
+				hijackedBtn = null
+			}
+
 			function installClickHijack(btn) {
+				if (btn._dsaoHijackRemover) return // 已安装
 				function onCaptureClick(ev) {
 					ev.stopPropagation()
 					ev.preventDefault()
@@ -112,66 +137,27 @@ function createResumeButton(React, gateMod) {
 					if (verdict.canResume !== true) return
 					var sessionId = snap && typeof snap.sessionId === 'string' ? snap.sessionId : ''
 					if (sessionId === '') return
-					// 立即交还按钮控制权给 React：停止 icon 替换和 click 劫持，
-					// 按钮自然回归官方渲染（agent 启动后 React 会画停止键）。
 					deactivate()
 					busy = true
 					requestResume(sessionId).then(function () {
-						settleTimer = setTimeout(function () {
-							busy = false
-							poll()
-						}, 1200)
+						settleTimer = setTimeout(function () { busy = false; poll() }, 1200)
 					}).catch(function () {
-						settleTimer = setTimeout(function () {
-							busy = false
-							poll()
-						}, 2600)
+						settleTimer = setTimeout(function () { busy = false; poll() }, 2600)
 					})
 				}
 				btn.addEventListener('click', onCaptureClick, true)
-				// 把 remover 存在按钮上以便后续清理
 				btn._dsaoHijackRemover = function () {
 					btn.removeEventListener('click', onCaptureClick, true)
+					btn._dsaoHijackRemover = null
 				}
 			}
 
 			function removeClickHijack(btn) {
 				if (btn && typeof btn._dsaoHijackRemover === 'function') {
 					btn._dsaoHijackRemover()
-					btn._dsaoHijackRemover = null
 				}
 			}
 
-			/**
-			 * 激活续跑面：保存原始状态 → 替换 icon + 劫持 click。
-			 */
-			function activate(btn) {
-				if (active && hijackedBtn === btn) return // 已激活且同一按钮
-				if (active && hijackedBtn !== btn) deactivate() // 切按钮：先还原
-				hijackedBtn = btn
-				// 不需要备份 innerHTML —— React 重画时 MutationObserver 会重做替换
-				active = true
-				applyResumeFace(btn)
-				installClickHijack(btn)
-			}
-
-			/**
-			 * 还原：移除劫持，让 React 下一次渲染恢复原始按钮。
-			 */
-			function deactivate() {
-				if (!active) return
-				if (hijackedBtn) {
-					removeClickHijack(hijackedBtn)
-					// 不手动还原 SVG —— 让 React 自己重画。
-					// 但需要触发 React 重画：修改一个 React 关心的属性 → 不靠谱。
-					// 更简单：手动恢复 disabled 状态（空稿时 React 会保持 disabled），
-					// 然后 React 的下次 setState/渲染会重画按钮内容。
-				}
-				active = false
-				hijackedBtn = null
-			}
-
-			// ── 轮询 + MutationObserver ──────────────────────────────
 			function poll() {
 				if (busy) return
 				var verdict = gateMod.canResume(sessionRef.current, draftRef.current)
@@ -182,28 +168,37 @@ function createResumeButton(React, gateMod) {
 					activate(btn)
 				} else {
 					deactivate()
-					// 如果刚从激活变为未激活，React 可能不会立即重画，
-					// 手动触发：修改 disabled 属性让 React 检测到变化。
-					// 但更可靠的方式：什么都不做，让下次 React render 自然恢复。
 				}
 			}
 
-			var timer = setInterval(poll, 500)
+			var timer = setInterval(poll, 400)
 
-			// React 重画按钮内部时（子树变更），如果仍处于激活态，重做替换。
+			// React 重画按钮时，如果仍处于激活态，确保标记和播放图标在位。
 			var domObs = new MutationObserver(function () {
 				if (!active) return
 				var btn = findPrimaryButton(trailing)
 				if (!btn || btn !== hijackedBtn) {
-					// 按钮被 React 替换了 → 重新激活新按钮
 					hijackedBtn = null
 					poll()
 				} else {
-					// 同一按钮但内部被 React 重画 → 重做 icon 替换
-					var svg = btn.querySelector('svg path')
-					if (!svg || svg.getAttribute('d') !== PATH_PLAY) {
-						applyResumeFace(btn)
+					// 同一按钮但 React 重画了子树 → 确保标记和播放 SVG 在位。
+					if (!btn.hasAttribute('data-dsao-resume')) {
+						btn.setAttribute('data-dsao-resume', '')
 					}
+					if (!btn.querySelector('svg[data-dsao-play]')) {
+						var playSvg = doc.createElementNS(SVG_NS, 'svg')
+						playSvg.setAttribute('viewBox', '0 0 16 16')
+						playSvg.setAttribute('width', '16')
+						playSvg.setAttribute('height', '16')
+						playSvg.setAttribute('aria-hidden', 'true')
+						playSvg.setAttribute('data-dsao-play', '')
+						var path = doc.createElementNS(SVG_NS, 'path')
+						path.setAttribute('d', PATH_PLAY)
+						path.setAttribute('fill', 'currentColor')
+						playSvg.appendChild(path)
+						btn.appendChild(playSvg)
+					}
+					if (!btn._dsaoHijackRemover) installClickHijack(btn)
 				}
 			})
 			domObs.observe(trailing, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'disabled'] })
@@ -218,7 +213,6 @@ function createResumeButton(React, gateMod) {
 			}
 		})
 
-		// 每次渲染后同步最新快照/草稿。
 		React.useEffect(function () {
 			sessionRef.current = props.session
 			draftRef.current = typeof (props.input && props.input.draft) === 'string' ? props.input.draft : ''
@@ -237,3 +231,4 @@ function createResumeButton(React, gateMod) {
 exports.createResumeButton = createResumeButton
 exports.RESUME_ENDPOINT = RESUME_ENDPOINT
 exports.findPrimaryButton = findPrimaryButton
+exports.ensureStyles = ensureStyles

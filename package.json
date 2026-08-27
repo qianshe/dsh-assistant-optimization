@@ -1,6 +1,6 @@
 {
   "name": "dsh-assistant-optimization",
-  "version": "1.6.7",
+  "version": "1.6.8",
   "description": "Fold mis-rendered thinking content into collapsible blocks, render mermaid inline, show file-edit diff counts, rewrite composer drafts with the current model, and resume interrupted turns from the send button.",
   "license": "MIT",
   "repository": {

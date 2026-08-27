@@ -17,22 +17,23 @@
 var TERMINAL_KINDS = ['aborted', 'error', 'max-tokens', 'interrupted']
 
 /**
- * 从 nodes（会话快照的投影行）取最后一个可判定终态（v1.6.1 修复主路径）：
+ * 从 nodes（会话快照的投影行）取最后一个节点的终态：
  *   kind==='assistant' && interrupted:true  -> aborted
  *   kind==='turn-error'                     -> error
  *   kind==='turn-max-tokens'                -> max-tokens
+ *   其余（正常完成的 assistant、user 等）-> undefined（不可续跑）
+ * 重要：只看**最后**一个节点，不向前回溯——否则一段历史中
+ * 有过中断但后来成功完成的会话会误判为可续跑。
  * 快照上的 turnEnds 是 Map<turn, seq> 纯序号、无 reason，旧路径仅作兜底。
  */
 function lastTerminalKindFromNodes(nodes) {
-  if (!Array.isArray(nodes)) return undefined
-  for (var i = nodes.length - 1; i >= 0; i--) {
-    var n = nodes[i]
-    if (n === null || n === undefined || typeof n !== 'object') continue
-    var kind = n.kind
-    if (kind === 'turn-error') return 'error'
-    if (kind === 'turn-max-tokens') return 'max-tokens'
-    if (kind === 'assistant' && n.interrupted === true) return 'aborted'
-  }
+  if (!Array.isArray(nodes) || nodes.length === 0) return undefined
+  var n = nodes[nodes.length - 1]
+  if (n === null || n === undefined || typeof n !== 'object') return undefined
+  var kind = n.kind
+  if (kind === 'turn-error') return 'error'
+  if (kind === 'turn-max-tokens') return 'max-tokens'
+  if (kind === 'assistant' && n.interrupted === true) return 'aborted'
   return undefined
 }
 
