@@ -14,7 +14,7 @@
 | 📊 | **Mermaid 图表** | 把 mermaid 代码块渲染成可交互 SVG（缩放 / 拖拽 / 触摸） |
 | ✎ | **编辑 Diff 数值** | 在折叠态 Write、Edit 行上显示 `+10/-2`，无需展开 |
 | ✨ | **Prompt 增强** | 一键把粗糙草稿改写成更清晰的指令 |
-| ▶ | **断点续发** | 调用出错或手动中断后，发送键变播放键，单击免输入重跑中断的那次调用（经配置的 Windsurf key 与本功能无关） |
+| ▶ | **断点续发** | 手动中断或会话出错后，发送键变为播放键——悬停显示提示，单击从断点续跑，使用当前选中的模型。输入文字或开始新一轮对话会立即恢复正常发送键。 |
 | 🛰️ | **语义搜索** | `context_search`：用模糊描述定位代码（Windsurf 驱动） |
 
 ### 推理折叠
@@ -42,7 +42,17 @@ Write、Edit 行在文件路径后带上 `+N`（新增） / `-N`（删除）徽�
 
 发送按钮左侧有一个星形按钮，用输入框里当前已选的模型把粗糙草稿改写成更清晰的指令。只发一次普通 chat 请求——不创建会话，不写日志——草稿原地替换，按 Ctrl/Cmd+Z 可撤销。
 
-请求进行中显示旋转进度环与「增强中」，完成后变绿对勾；失败时图标闪红、原因写进 tooltip，且**草稿绝不会被清空**。tooltip 还会报告上次调用实际收到了多少上下文——改写不理想时这是第一个该看的地方。
+请求进行中显示旋转进度环与「增强中」，完成后变绿对勾；失败时图标闪红、原因写进 tooltip，且**草稿绝不会被清空**。tooltip 使用与 DSH 原生按钮统一的 CSS 样式，还会报告上次调用实际收到了多少上下文——改写不理想时这是第一个该看的地方。
+
+### 断点续发
+
+当会话异常停止——用户点了**停止**或会话出错——发送按钮变为 ▶ 播放键。悬停时显示与 DSH 原生按钮统一的提示（「断点续发」）。
+
+- **单击续跑**：通过宿主路由发送续跑信号，agent 从中断处继续，使用输入框中当前选中的模型。
+- **即时恢复**：在草稿中输入文字、或 agent 开始运行时，立即恢复正常发送/停止按钮——不会卡在播放图标。
+- **判定逻辑**：直接读 `session.chat.timeline` 中最后一轮已关闭 turn 的 `turn/end` 原因。只有 `aborted`（用户停止）和 `error`（会话出错）触发播放键；正常完成和 max-tokens 不触发。
+- **空标记行**：续跑标记进入对话流时，插件将空白气泡 + 复制按钮替换为一条低调的「已从中断处继续」提示。
+- **实现方式**：CSS 叠加——通过 `data-dsao-resume` 属性隐藏官方按钮 SVG 并注入播放 SVG，不干扰 React 重渲染周期。
 
 ### 语义搜索（`context_search`）
 
@@ -87,6 +97,9 @@ node test/ensure-badge.test.mjs
 node test/context.test.mjs
 node test/prompt-enhance.test.mjs
 node test/host-prompt-enhance.test.mjs
+node test/resume-gate.test.mjs
+node test/resume-route.test.mjs
+node test/resume-continuity.test.mjs
 node test/fast-context-gate.test.mjs
 node test/content-embed.test.mjs
 node --check lib/client.js

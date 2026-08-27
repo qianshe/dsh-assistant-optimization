@@ -14,7 +14,7 @@ Five capabilities, all plug-and-play. Official rendering is never replaced — t
 | 📊 | **Mermaid diagrams** | Renders mermaid code blocks as interactive SVG (zoom / pan / touch) |
 | ✎ | **Edit diff counts** | Shows `+10/-2` on collapsed Write & Edit rows, no expand needed |
 | ✨ | **Prompt enhance** | Rewrites a rough draft into a clearer instruction in one click |
-| ▶ | **Resume-from-breakpoint** | After an error or manual stop, the send button turns into a play key: one click replays the interrupted call, no typing needed |
+| ▶ | **Resume-from-breakpoint** | After a manual stop or session error, the send button becomes a play key — hover shows a tooltip, one click resumes from the interruption with the currently selected model. Typing or starting a new turn instantly restores the normal send button. |
 | 🛰️ | **Semantic search** | `context_search` — locate code from a vague description (Windsurf-backed) |
 
 ### Reasoning fold
@@ -42,7 +42,17 @@ Write and Edit rows carry a `+N` (added) / `-N` (removed) badge right after the 
 
 A sparkle button sits left of the send button and rewrites a rough draft into a clearer instruction using the model already selected in the composer. It sends one plain chat request — no session, nothing logged — and replaces the draft in place, so Ctrl/Cmd+Z undoes it.
 
-While running it shows a spinning arc and "增强中"; on success a green check; on failure the icon flashes red with the reason in its tooltip and **the draft is never cleared**. The tooltip also reports how much context the last call actually received — the first thing to check when a rewrite is unhelpful.
+While running it shows a spinning arc and "增强中"; on success a green check; on failure the icon flashes red with the reason in its tooltip and **the draft is never cleared**. The tooltip uses the same CSS styling as DSH's native button tooltips and also reports how much context the last call actually received — the first thing to check when a rewrite is unhelpful.
+
+### Resume-from-breakpoint
+
+When a conversation stops abnormally — the user clicks **Stop** or the session hits an error — the send button transforms into a ▶ play key. A hover tooltip ("断点续发") appears with the same style as DSH's native button tooltips.
+
+- **One click** sends a resume signal via the host route; the agent picks up from the interruption using whatever model is currently selected in the composer.
+- **Instant revert**: typing in the draft, or the agent starting to run, immediately restores the normal send/stop button — no stuck play icon.
+- **Gate logic**: reads `session.chat.timeline` for the last closed turn's `turn/end` reason. Only `aborted` (user stop) and `error` (session error) trigger the play button; normal completions and max-tokens do not.
+- **Empty marker rows**: when the resume marker enters the transcript, the plugin replaces the blank bubble + copy button with a subtle "已从中断处继续" hint line.
+- **Implementation**: CSS-overlay approach — the official button's SVG is hidden via `data-dsao-resume` attribute + a play SVG sibling, so React's re-render cycle is never disrupted.
 
 ### Semantic search (`context_search`)
 
@@ -87,6 +97,9 @@ node test/ensure-badge.test.mjs
 node test/context.test.mjs
 node test/prompt-enhance.test.mjs
 node test/host-prompt-enhance.test.mjs
+node test/resume-gate.test.mjs
+node test/resume-route.test.mjs
+node test/resume-continuity.test.mjs
 node test/fast-context-gate.test.mjs
 node test/content-embed.test.mjs
 node --check lib/client.js
