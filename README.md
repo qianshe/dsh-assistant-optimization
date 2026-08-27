@@ -14,6 +14,7 @@ Five capabilities, all plug-and-play. Official rendering is never replaced — t
 | 📊 | **Mermaid diagrams** | Renders mermaid code blocks as interactive SVG (zoom / pan / touch) |
 | ✎ | **Edit diff counts** | Shows `+10/-2` on collapsed Write & Edit rows, no expand needed |
 | ✨ | **Prompt enhance** | Rewrites a rough draft into a clearer instruction in one click |
+| ▶ | **Resume-from-breakpoint** | After an error or manual stop, the send button turns into a play key: one click replays the interrupted call, no typing needed |
 | 🛰️ | **Semantic search** | `context_search` — locate code from a vague description (Windsurf-backed) |
 
 ### Reasoning fold

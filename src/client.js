@@ -16,6 +16,8 @@
 //   wrapper.js        — WrappedAssistantStep / WrappedToolCallRow + official renderer finders
 //   context.js        — private-reference extraction (project / instructions / summary / history)
 //   prompt-enhance.js — composer button + placement
+//   resume-gate.js    — ▶ 门控纯函数（FR-1 谓词）
+//   resume-button.js  — 断点续发播放键（发送键旁挂，轮询门控）
 //   mermaid.js        — MutationObserver + SVG rendering
 //   settings.js       — TagsSetting React component
 //
@@ -79,6 +81,15 @@ function apply(ctx) {
     return slots.register(
       { name: "conversation.input.right", id: "dsao-prompt-enhance", order: 100, locale: "conversation" },
       PromptEnhanceMount
+    );
+  });
+
+  // 3b. 断点续发播放键：同槽位兄弟节点（order 101），门控点亮、点击调用
+  //     /api/dsao/resume 免输入唤醒（PRD §14 Phase 2）。
+  slots.inject("conversation.input.right", function () {
+    return slots.register(
+      { name: "conversation.input.right", id: "dsao-resume", order: 101, locale: "conversation" },
+      ResumeMount
     );
   });
 
