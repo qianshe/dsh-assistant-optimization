@@ -38,6 +38,26 @@ var CSS = [
   '[data-dsao-enhance-btn] .dsao-enh-spinner{transform-origin:8px 8px;animation:dsao-enh-spin .7s linear infinite}',
   '[data-dsao-enhance-btn] .dsao-enh-label{max-width:0;opacity:0;overflow:hidden;white-space:nowrap;transition:max-width 180ms ease,opacity 180ms ease,margin-left 180ms ease;margin-left:0}',
   '[data-dsao-enhance-btn][data-state="busy"] .dsao-enh-label{max-width:52px;opacity:1;margin-left:4px}',
+  '[data-dsao-enhance-btn]{position:relative}',
+  '[data-dsao-enhance-btn]::after{',
+    'content:attr(data-dsao-tip);',
+    'position:absolute;',
+    'bottom:calc(100% + 6px);',
+    'left:50%;',
+    'transform:translateX(-50%);',
+    'background:var(--dsw-alias-tooltip-bg,#2c2c2e);',
+    'color:#fff;',
+    'font-size:12px;',
+    'line-height:1;',
+    'padding:6px 10px;',
+    'border-radius:6px;',
+    'white-space:nowrap;',
+    'pointer-events:none;',
+    'opacity:0;',
+    'transition:opacity .15s ease .3s;',
+    'z-index:100;',
+  '}',
+  '[data-dsao-enhance-btn]:not(:disabled):hover::after{opacity:1}',
 ].join('\n')
 
 function ensureStyles(doc) {
@@ -168,7 +188,7 @@ function createPromptEnhance(React, contextMod) {
       btn.setAttribute('data-dsao-enhance-btn', '')
       btn.setAttribute('data-state', 'idle')
       btn.setAttribute('aria-label', 'Prompt 增强')
-      btn.title = IDLE_TITLE
+      btn.setAttribute('data-dsao-tip', IDLE_TITLE)
       btn.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;height:24px;flex:none;padding:0 4px;margin:0;border:none;border-radius:6px;background:transparent;color:' + IDLE_COLOR + ';cursor:pointer;font:inherit;font-size:12px;line-height:1;transition:background 120ms,color 120ms;'
 
       var svg = doc.createElementNS(SVG_NS, 'svg')
@@ -219,7 +239,7 @@ function createPromptEnhance(React, contextMod) {
         btn.setAttribute('aria-busy', s.busy ? 'true' : 'false')
         if (s.busy) {
           btn.setAttribute('data-state', 'busy')
-          btn.title = BUSY_TITLE
+          btn.setAttribute('data-dsao-tip', BUSY_TITLE)
           btn.style.opacity = '1'
           btn.style.color = 'var(--dsw-alias-brand-primary)'
           btn.style.background = 'var(--dsw-alias-bg-layer-2)'
@@ -228,16 +248,17 @@ function createPromptEnhance(React, contextMod) {
           return
         }
         btn.setAttribute('data-state', 'idle')
+        btn.setAttribute('data-dsao-tip', idleTip())
         btn.style.opacity = s.blocked ? '0.4' : '1'
         btn.style.background = 'transparent'
         spinner.style.display = 'none'
         icon.style.display = ''
       }
 
-      /** Idle tooltip shows the last search stats when available. */
-      var idleTitle = function () {
+      /** Idle tooltip text: one line, or two with last search stats. */
+      var idleTip = function () {
         var diag = lastRefRef.current
-        return diag === '' ? IDLE_TITLE : IDLE_TITLE + '\n' + diag
+        return diag === '' ? IDLE_TITLE : IDLE_TITLE + ' · ' + diag
       }
 
       var settle = function (ok, why) {
@@ -246,13 +267,11 @@ function createPromptEnhance(React, contextMod) {
         btn.style.color = ok
           ? 'var(--dsw-alias-state-success-primary)'
           : 'var(--dsw-alias-state-error-primary)'
-        btn.title = ok
-          ? idleTitle()
-          : 'Prompt 增强失败：' + why
+        btn.setAttribute('data-dsao-tip', ok ? idleTip() : 'Prompt 增强失败：' + why)
         settleTimer = setTimeout(function () {
           icon.setAttribute('d', PATH_SPARKLE)
           btn.style.color = IDLE_COLOR
-          btn.title = idleTitle()
+          btn.setAttribute('data-dsao-tip', idleTip())
           settleTimer = null
         }, ok ? 1400 : 2600)
       }
