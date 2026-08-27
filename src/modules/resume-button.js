@@ -112,18 +112,18 @@ function createResumeButton(React, gateMod) {
 					if (verdict.canResume !== true) return
 					var sessionId = snap && typeof snap.sessionId === 'string' ? snap.sessionId : ''
 					if (sessionId === '') return
+					// 立即交还按钮控制权给 React：停止 icon 替换和 click 劫持，
+					// 按钮自然回归官方渲染（agent 启动后 React 会画停止键）。
+					deactivate()
 					busy = true
-					if (hijackedBtn) hijackedBtn.setAttribute('disabled', '')
 					requestResume(sessionId).then(function () {
 						settleTimer = setTimeout(function () {
 							busy = false
-							if (hijackedBtn) hijackedBtn.removeAttribute('disabled')
 							poll()
 						}, 1200)
 					}).catch(function () {
 						settleTimer = setTimeout(function () {
 							busy = false
-							if (hijackedBtn) hijackedBtn.removeAttribute('disabled')
 							poll()
 						}, 2600)
 					})
