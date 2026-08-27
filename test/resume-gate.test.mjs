@@ -1,120 +1,123 @@
-// Verify the resume gate predicate with real DSH snapshot shapes.
+// Verify the resume gate predicate — timeline-based approach.
 // Run: node test/resume-gate.test.mjs
 import assert from 'node:assert/strict'
 import { loadBundleModule } from './load-module.mjs'
-const { canResume, TERMINAL_KINDS, lastTerminalFromChatNodes, lastTerminalFromLegacyNodes } = loadBundleModule('dsao/resume-gate')
+const { canResume, lastTurnReasonKind, RESUMABLE_KINDS } = loadBundleModule('dsao/resume-gate')
 
 // ── Helpers ──────────────────────────────────────────────────────────────
-function makeChatNode(key, kind, data, visibility = 'visible') {
-  return { key, kind, data, anchorSeq: 0, visibility }
-}
-
-function makeSession({ chat, running, queue, subagent, nodes } = {}) {
-  const s = { running: running ?? false, queue: queue ?? [], subagent: subagent ?? null }
-  if (chat) s.chat = chat
-  if (nodes) s.nodes = nodes
-  return s
-}
-
-function makeChat(nodes, order) {
-  const map = new Map()
-  for (const n of nodes) map.set(n.key, n)
+function makeTurn(num, reasonKind, status = 'closed') {
   return {
-    order: order ?? nodes.map(n => n.key),
-    nodes: map,
-    legacy: { nodes: [], turnEnds: new Map() },
+    turn: num,
+    start: { type: 'turn/start', data: { turn: num }, seq: num * 10 },
+    end: reasonKind === undefined ? undefined : {
+      type: 'turn/end',
+      seq: num * 10 + 9,
+      data: { turn: num, reason: { kind: reasonKind } },
+    },
+    status,
+    steps: [],
+    data: {},
   }
 }
 
-// ── 1. Happy path: interrupted assistant-step as last node ──────────────
+function makeTimeline(...turns) {
+  const map = new Map()
+  for (const t of turns) map.set(t.turn, t)
+  return { turns: map, turnOrder: turns.map(t => t.turn) }
+}
+
+function makeSession({ timeline, running, queue, subagent } = {}) {
+  return {
+    running: running ?? false,
+    queue: queue ?? [],
+    subagent: subagent ?? null,
+    chat: { timeline: timeline ?? makeTimeline() },
+  }
+}
+
+// ── 1. User stopped (aborted) → resumable ────────────────────────────────
 {
-  const chat = makeChat([
-    makeChatNode('u1', 'user', { kind: 'user', seq: 1 }),
-    makeChatNode('a1', 'assistant-step', { kind: 'assistant', interrupted: true, turn: 1 }),
-  ])
-  const s = makeSession({ chat })
+  const tl = makeTimeline(makeTurn(1, 'aborted'))
+  const s = makeSession({ timeline: tl })
   assert.deepEqual(canResume(s, ''), { canResume: true, terminalKind: 'aborted' })
 }
 
-// ── 2. Completed session (normal assistant-step, not interrupted) ───────
+// ── 2. Session error → resumable ─────────────────────────────────────────
 {
-  const chat = makeChat([
-    makeChatNode('u1', 'user', { kind: 'user', seq: 1 }),
-    makeChatNode('a1', 'assistant-step', { kind: 'assistant', turn: 1 }),
-  ])
-  const s = makeSession({ chat })
+  const tl = makeTimeline(makeTurn(1, 'error'))
+  const s = makeSession({ timeline: tl })
+  assert.deepEqual(canResume(s, ''), { canResume: true, terminalKind: 'error' })
+}
+
+// ── 3. Max tokens → resumable ────────────────────────────────────────────
+{
+  const tl = makeTimeline(makeTurn(1, 'max-tokens'))
+  const s = makeSession({ timeline: tl })
+  assert.deepEqual(canResume(s, ''), { canResume: true, terminalKind: 'max-tokens' })
+}
+
+// ── 4. Normal completion → NOT resumable ─────────────────────────────────
+{
+  const tl = makeTimeline(makeTurn(1, 'completed'))
+  const s = makeSession({ timeline: tl })
+  assert.equal(canResume(s, '').canResume, false)
+  assert.equal(canResume(s, '').terminalKind, 'completed')
+}
+
+// ── 5. Blocked → NOT resumable ───────────────────────────────────────────
+{
+  const tl = makeTimeline(makeTurn(1, 'blocked'))
+  const s = makeSession({ timeline: tl })
   assert.equal(canResume(s, '').canResume, false)
 }
 
-// ── 3. turn-error as last node ──────────────────────────────────────────
+// ── 6. Multi-turn: earlier aborted, later completed → NOT resumable ──────
 {
-  const chat = makeChat([
-    makeChatNode('a1', 'assistant-step', { kind: 'assistant', turn: 1 }),
-    makeChatNode('e1', 'turn-error', { kind: 'error' }),
-  ])
-  const s = makeSession({ chat })
-  assert.deepEqual(canResume(s, '').terminalKind, 'error')
-}
-
-// ── 4. turn-max-tokens as last node ─────────────────────────────────────
-{
-  const chat = makeChat([
-    makeChatNode('a1', 'assistant-step', { kind: 'assistant', turn: 1 }),
-    makeChatNode('m1', 'turn-max-tokens', { kind: 'max-tokens' }),
-  ])
-  const s = makeSession({ chat })
-  assert.deepEqual(canResume(s, '').terminalKind, 'max-tokens')
-}
-
-// ── 5. Earlier interrupted but later completed → NOT resumable ──────────
-{
-  const chat = makeChat([
-    makeChatNode('a1', 'assistant-step', { kind: 'assistant', interrupted: true, turn: 1 }),
-    makeChatNode('a2', 'assistant-step', { kind: 'assistant', turn: 2 }),
-  ])
-  const s = makeSession({ chat })
+  const tl = makeTimeline(
+    makeTurn(1, 'aborted'),
+    makeTurn(2, 'completed'),
+  )
+  const s = makeSession({ timeline: tl })
   assert.equal(canResume(s, '').canResume, false)
 }
 
-// ── 6. Blocking inputs ──────────────────────────────────────────────────
+// ── 7. Multi-turn: earlier completed, later aborted → resumable ──────────
 {
-  const chat = makeChat([makeChatNode('a1', 'assistant-step', { kind: 'assistant', interrupted: true })])
-  const base = makeSession({ chat })
+  const tl = makeTimeline(
+    makeTurn(1, 'completed'),
+    makeTurn(2, 'aborted'),
+  )
+  const s = makeSession({ timeline: tl })
+  assert.deepEqual(canResume(s, ''), { canResume: true, terminalKind: 'aborted' })
+}
+
+// ── 8. Open turn (still running) → not terminal from timeline ────────────
+{
+  const tl = makeTimeline(makeTurn(1, undefined, 'open'))
+  const s = makeSession({ timeline: tl })
+  assert.equal(canResume(s, '').canResume, false)
+}
+
+// ── 9. Blocking inputs ───────────────────────────────────────────────────
+{
+  const tl = makeTimeline(makeTurn(1, 'aborted'))
+  const base = makeSession({ timeline: tl })
   assert.equal(canResume({ ...base, running: true }, '').reason, 'running')
   assert.equal(canResume({ ...base, subagent: { address: {} } }, '').reason, 'subagent')
   assert.equal(canResume(base, 'hello').reason, 'draft-not-empty')
-  assert.equal(canResume(base, '  \t ').canResume, true) // whitespace = empty
-  const queued = { ...base, queue: [{ placement: 'queued' }] }
-  assert.equal(canResume(queued, '').reason, 'queue-pending')
+  assert.equal(canResume(base, '  \t ').canResume, true)
+  assert.equal(canResume({ ...base, queue: [{ placement: 'queued' }] }, '').reason, 'queue-pending')
 }
 
-// ── 7. Legacy fallback: chat.legacy.nodes ────────────────────────────────
-{
-  const chat = {
-    order: [],
-    nodes: new Map(),
-    legacy: {
-      nodes: [
-        { kind: 'user', seq: 1 },
-        { kind: 'assistant', interrupted: true, seq: 2 },
-      ],
-      turnEnds: new Map(),
-    },
-  }
-  const s = makeSession({ chat })
-  assert.deepEqual(canResume(s, ''), { canResume: true, terminalKind: 'aborted' })
-}
-
-// ── 8. No session / empty ───────────────────────────────────────────────
+// ── 10. Edge cases ───────────────────────────────────────────────────────
 assert.equal(canResume(null, '').reason, 'no-session')
 assert.equal(canResume({}, '').reason, 'no-terminal')
+assert.equal(canResume({ chat: {} }, '').reason, 'no-terminal')
 
-// ── 9. Every terminal kind is resumable ─────────────────────────────────
-for (const kind of TERMINAL_KINDS) {
-  const chat = makeChat([makeChatNode('x', kind === 'aborted' ? 'assistant-step' : kind === 'error' ? 'turn-error' : 'turn-max-tokens',
-    kind === 'aborted' ? { interrupted: true } : {})])
-  const s = makeSession({ chat })
-  assert.equal(canResume(s, '').canResume, true, `${kind} must resume`)
-}
+// ── 11. lastTurnReasonKind direct tests ──────────────────────────────────
+assert.equal(lastTurnReasonKind(makeTimeline(makeTurn(3, 'error'))), 'error')
+assert.equal(lastTurnReasonKind(makeTimeline()), undefined)
+assert.equal(lastTurnReasonKind(undefined), undefined)
+assert.equal(lastTurnReasonKind({ turns: null }), undefined)
 
 console.log('resume-gate: all assertions passed')

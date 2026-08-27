@@ -1,60 +1,42 @@
 // resume-gate.js — 决定"发送键是否变 ▶"的纯函数。
 //
-// v1.7.0 完全重写，修正数据路径：
-//   snapshot.chat.nodes    → Map<key, {key, kind, data, anchorSeq, ...}>
-//   snapshot.chat.order    → 有序 key 数组
-//   snapshot.chat.legacy.nodes → 已完成节点 data 对象的扁平数组（按 seq 排序）
-//   snapshot.chat.legacy.turnEnds → Map<turn, endSeq>（仅序号，无 reason）
+// v1.6.11 彻底简化：直接从 timeline 的最后一轮 turn/end 事件读 reason.kind。
 //
-// 判定策略（按可靠性从高到低）：
-//   1. 遍历 chat.nodes（Map）按 chat.order 取最后一个可见节点，
-//      检查 node.kind 是否为中断/错误/max-tokens 类型。
-//   2. 回退到 chat.legacy.nodes（数组），看最后一个 data.kind + data.interrupted。
-//   3. 都拿不到 → no-terminal → 不显示 ▶。
+// 数据路径：
+//   session.chat.timeline.turns → Map<turnNum, {
+//     turn, start, end, status, steps, data
+//   }>
+//
+// turn.end 是 turn/end 原始事件，其 data.reason.kind 就是终止原因：
+//   "aborted"      → 用户手动停止
+//   "error"        → 会话出错
+//   "max-tokens"   → 达到 token 上限
+//   "completed"    → 正常完成（不可续跑）
+//   "blocked"      → 被拒绝（不可续跑）
+//
+// 只要看最后一轮的 reason.kind 是否属于可续跑集合即可。
+// 不再依赖 chat.nodes Map、legacy.nodes、interrupted 标志等间接信号。
 
-var TERMINAL_KINDS = ['aborted', 'error', 'max-tokens', 'interrupted']
+var RESUMABLE_KINDS = { aborted: true, error: true, 'max-tokens': true }
 
 /**
- * 从 chat nodes（Map）+ order（key 数组）取最后一个节点的终态。
- * 返回 'aborted' | 'error' | 'max-tokens' | undefined。
+ * 从 timeline 取最后一轮已关闭 turn 的终止原因 kind。
+ * @returns {string|undefined} reason.kind 或 undefined。
  */
-function lastTerminalFromChatNodes(chatNodes, order) {
-  if (!chatNodes || typeof chatNodes.get !== 'function') return undefined
-  if (!Array.isArray(order) || order.length === 0) return undefined
-
-  // 从 order 末尾向前找最后一个 visible 节点。
-  for (var i = order.length - 1; i >= 0; i--) {
-    var node = chatNodes.get(order[i])
-    if (!node) continue
-    // 跳过隐藏节点。
-    if (node.visibility && node.visibility !== 'visible') continue
-
-    var kind = node.kind
-    if (kind === 'turn-error') return 'error'
-    if (kind === 'turn-max-tokens') return 'max-tokens'
-    // assistant-step 节点的中断标志在 node.data.interrupted。
-    if (kind === 'assistant-step') {
-      var data = node.data
-      if (data && data.interrupted === true) return 'aborted'
-      // 正常完成的 assistant-step（非中断）→ 会话已完成，不回溯更早节点。
-      return undefined
+function lastTurnReasonKind(timeline) {
+  if (!timeline || !timeline.turns || typeof timeline.turns.forEach !== 'function') return undefined
+  var lastTurn = null
+  var lastTurnNum = -1
+  timeline.turns.forEach(function (turn) {
+    if (turn && turn.status === 'closed' && typeof turn.turn === 'number' && turn.turn > lastTurnNum) {
+      lastTurnNum = turn.turn
+      lastTurn = turn
     }
-    // user / steering / command / tool-call 等 → 不是终态节点，跳过。
-  }
-  return undefined
-}
-
-/**
- * 从 legacy.nodes（扁平 data 数组）取最后一个终态。
- */
-function lastTerminalFromLegacyNodes(legacyNodes) {
-  if (!Array.isArray(legacyNodes) || legacyNodes.length === 0) return undefined
-  var last = legacyNodes[legacyNodes.length - 1]
-  if (!last || typeof last !== 'object') return undefined
-  if (last.kind === 'turn-error') return 'error'
-  if (last.kind === 'turn-max-tokens') return 'max-tokens'
-  if (last.kind === 'assistant' && last.interrupted === true) return 'aborted'
-  return undefined
+  })
+  if (!lastTurn || !lastTurn.end) return undefined
+  var reason = lastTurn.end.data && lastTurn.end.data.reason
+  if (!reason || typeof reason.kind !== 'string') return undefined
+  return reason.kind
 }
 
 /**
@@ -81,33 +63,19 @@ function canResume(session, draft) {
     }
   }
 
-  // 主路径：chat.nodes (Map) + chat.order。
-  var chat = session.chat
-  var kind
-  if (chat && chat.nodes && chat.order) {
-    kind = lastTerminalFromChatNodes(chat.nodes, chat.order)
-  }
-  // 回退：chat.legacy.nodes。
-  if (kind === undefined && chat && chat.legacy && Array.isArray(chat.legacy.nodes)) {
-    kind = lastTerminalFromLegacyNodes(chat.legacy.nodes)
-  }
-  // 极旧回退：session.nodes（已废弃路径）。
-  if (kind === undefined && Array.isArray(session.nodes)) {
-    kind = lastTerminalFromLegacyNodes(session.nodes)
-  }
+  var kind = lastTurnReasonKind(session.chat && session.chat.timeline)
 
   if (kind === undefined) {
     return { canResume: false, reason: 'no-terminal' }
   }
-  if (TERMINAL_KINDS.indexOf(kind) === -1) {
+  if (!RESUMABLE_KINDS[kind]) {
     return { canResume: false, reason: 'terminal-' + kind, terminalKind: kind }
   }
   return { canResume: true, terminalKind: kind }
 }
 
 module.exports = {
-  TERMINAL_KINDS: TERMINAL_KINDS,
+  RESUMABLE_KINDS: RESUMABLE_KINDS,
   canResume: canResume,
-  lastTerminalFromChatNodes: lastTerminalFromChatNodes,
-  lastTerminalFromLegacyNodes: lastTerminalFromLegacyNodes,
+  lastTurnReasonKind: lastTurnReasonKind,
 }
