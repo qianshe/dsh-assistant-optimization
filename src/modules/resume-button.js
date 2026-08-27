@@ -19,8 +19,30 @@ function ensureStyles(doc) {
 	if (doc.getElementById('dsao-resume-btn-css') !== null) return
 	var style = doc.createElement('style')
 	style.id = 'dsao-resume-btn-css'
-	// 激活时隐藏官方 icon（第一个 svg），播放 icon（data-dsao-play）不受影响。
-	style.textContent = '[data-dsao-resume] > svg:not([data-dsao-play]){display:none}'
+	// 隐藏官方 icon + 悬浮提示（与 DSH Tooltip 统一：var(--dsw-alias-tooltip-bg)）。
+	style.textContent = [
+		'[data-dsao-resume] > svg:not([data-dsao-play]){display:none}',
+		'[data-dsao-resume]{position:relative}',
+		'[data-dsao-resume]::after{',
+			'content:attr(data-dsao-tip);',
+			'position:absolute;',
+			'bottom:calc(100% + 6px);',
+			'left:50%;',
+			'transform:translateX(-50%);',
+			'background:var(--dsw-alias-tooltip-bg,#2c2c2e);',
+			'color:#fff;',
+			'font-size:12px;',
+			'line-height:1;',
+			'padding:6px 10px;',
+			'border-radius:6px;',
+			'white-space:nowrap;',
+			'pointer-events:none;',
+			'opacity:0;',
+			'transition:opacity .15s ease .3s;',
+			'z-index:100;',
+		'}',
+		'[data-dsao-resume]:hover::after{opacity:1}',
+	].join('')
 	doc.head.appendChild(style)
 }
 
@@ -90,6 +112,7 @@ function createResumeButton(React, gateMod) {
 				hijackedBtn = btn
 				active = true
 				btn.setAttribute('data-dsao-resume', '')
+				btn.setAttribute('data-dsao-tip', '断点续发')
 				btn.setAttribute('aria-label', '断点续发')
 				btn.removeAttribute('disabled')
 				// 追加播放 SVG（幂等）。
@@ -118,6 +141,7 @@ function createResumeButton(React, gateMod) {
 				if (hijackedBtn) {
 					removeClickHijack(hijackedBtn)
 					hijackedBtn.removeAttribute('data-dsao-resume')
+					hijackedBtn.removeAttribute('data-dsao-tip')
 					hijackedBtn.removeAttribute('aria-label')
 					var playSvg = hijackedBtn.querySelector('svg[data-dsao-play]')
 					if (playSvg) playSvg.remove()
@@ -181,9 +205,11 @@ function createResumeButton(React, gateMod) {
 					hijackedBtn = null
 					poll()
 				} else {
-					// 同一按钮但 React 重画了子树 → 确保标记和播放 SVG 在位。
+					// 同一按钮但 React 重画了子树 → 确保标记、提示和播放 SVG 在位。
 					if (!btn.hasAttribute('data-dsao-resume')) {
 						btn.setAttribute('data-dsao-resume', '')
+						btn.setAttribute('data-dsao-tip', '断点续发')
+						btn.setAttribute('aria-label', '断点续发')
 					}
 					if (!btn.querySelector('svg[data-dsao-play]')) {
 						var playSvg = doc.createElementNS(SVG_NS, 'svg')
