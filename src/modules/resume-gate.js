@@ -1,82 +1,64 @@
-// resume-gate.js — 决定"发送键是否变 ▶"的纯函数与最小 DOM 帮手。
+// resume-gate.js — 决定"发送键是否变 ▶"的纯函数。
 //
-// 输入全部来自会话快照（client-runtime session controller 的 snapshot），
-// 五个门控量对应 PRD FR-1：
-//   running        快照.running（bool）
-//   queue          快照.queue 数组，只看 placement === 'queued' 的行
-//   turnEnds       快照.turnEnds —— 每个 turn 的 {start,end,...} 草稿，
-//                  end 是 turn/end 事件本身；取 seq 最大的一条读 reason.kind
-//   draft          输入框草稿（空才允许 ▶）
-//   subagent       非空 = 子代理会话，一律不给 ▶
+// v1.7.0 完全重写，修正数据路径：
+//   snapshot.chat.nodes    → Map<key, {key, kind, data, anchorSeq, ...}>
+//   snapshot.chat.order    → 有序 key 数组
+//   snapshot.chat.legacy.nodes → 已完成节点 data 对象的扁平数组（按 seq 排序）
+//   snapshot.chat.legacy.turnEnds → Map<turn, endSeq>（仅序号，无 reason）
 //
-// 图片附件在输入区 props 里拿不到可靠信号：v0 接受"挂图 + 空草稿 + 可继续
-// 时点 ▶ 依然走续跑"，这是对 FR-1 的已知放宽（附录 B 备注）。
-//
-// 设计成不依赖 React：组件层用轮询调它并把结果写进按钮态。
+// 判定策略（按可靠性从高到低）：
+//   1. 遍历 chat.nodes（Map）按 chat.order 取最后一个可见节点，
+//      检查 node.kind 是否为中断/错误/max-tokens 类型。
+//   2. 回退到 chat.legacy.nodes（数组），看最后一个 data.kind + data.interrupted。
+//   3. 都拿不到 → no-terminal → 不显示 ▶。
 
 var TERMINAL_KINDS = ['aborted', 'error', 'max-tokens', 'interrupted']
 
 /**
- * 从 nodes（会话快照的投影行）取最后一个节点的终态：
- *   kind==='assistant' && interrupted:true  -> aborted
- *   kind==='turn-error'                     -> error
- *   kind==='turn-max-tokens'                -> max-tokens
- *   其余（正常完成的 assistant、user 等）-> undefined（不可续跑）
- * 重要：只看**最后**一个节点，不向前回溯——否则一段历史中
- * 有过中断但后来成功完成的会话会误判为可续跑。
- * 快照上的 turnEnds 是 Map<turn, seq> 纯序号、无 reason，旧路径仅作兜底。
+ * 从 chat nodes（Map）+ order（key 数组）取最后一个节点的终态。
+ * 返回 'aborted' | 'error' | 'max-tokens' | undefined。
  */
-function lastTerminalKindFromNodes(nodes) {
-  if (!Array.isArray(nodes) || nodes.length === 0) return undefined
-  var n = nodes[nodes.length - 1]
-  if (n === null || n === undefined || typeof n !== 'object') return undefined
-  var kind = n.kind
-  if (kind === 'turn-error') return 'error'
-  if (kind === 'turn-max-tokens') return 'max-tokens'
-  // 中断的助手消息节点 kind 是 'assistant-step'（非 'assistant'），
-  // interrupted 标志挂在 node.data.interrupted 上。
-  if (kind === 'assistant-step' && n.data && n.data.interrupted === true) return 'aborted'
+function lastTerminalFromChatNodes(chatNodes, order) {
+  if (!chatNodes || typeof chatNodes.get !== 'function') return undefined
+  if (!Array.isArray(order) || order.length === 0) return undefined
+
+  // 从 order 末尾向前找最后一个 visible 节点。
+  for (var i = order.length - 1; i >= 0; i--) {
+    var node = chatNodes.get(order[i])
+    if (!node) continue
+    // 跳过隐藏节点。
+    if (node.visibility && node.visibility !== 'visible') continue
+
+    var kind = node.kind
+    if (kind === 'turn-error') return 'error'
+    if (kind === 'turn-max-tokens') return 'max-tokens'
+    // assistant-step 节点的中断标志在 node.data.interrupted。
+    if (kind === 'assistant-step') {
+      var data = node.data
+      if (data && data.interrupted === true) return 'aborted'
+      // 正常完成的 assistant-step（非中断）→ 会话已完成，不回溯更早节点。
+      return undefined
+    }
+    // user / steering / command / tool-call 等 → 不是终态节点，跳过。
+  }
   return undefined
 }
 
-/** 从 turnEnds（数组、Map 或普通对象）里取最后一条 turn/end 的 reason.kind。 */
-function lastTerminalKind(turnEnds) {
-  if (turnEnds === null || turnEnds === undefined || typeof turnEnds !== 'object') return undefined
-  var list
-  if (typeof turnEnds.forEach === 'function' && !(turnEnds instanceof Array)) {
-    // Map 或类 Map：values() 也是 forEach 遍历。
-    list = []
-    turnEnds.forEach(function (value) { list.push(value) })
-  } else if (Array.isArray(turnEnds)) {
-    list = turnEnds
-  } else {
-    list = Object.keys(turnEnds).map(function (k) { return turnEnds[k] })
-  }
-  var best = null
-  var bestSeq = -1
-  for (var i = 0; i < list.length; i++) {
-    var entry = list[i]
-    if (entry === null || entry === undefined || typeof entry !== 'object') continue
-    var end = entry.end
-    if (end === null || end === undefined || typeof end !== 'object') continue
-    var data = end.data
-    if (data === null || data === undefined || typeof data !== 'object') continue
-    var reason = data.reason
-    if (reason === null || reason === undefined || typeof reason !== 'object') continue
-    var kindHere = typeof reason.kind === 'string' ? reason.kind : undefined
-    if (kindHere === undefined) continue
-    var seq = typeof end.seq === 'number' ? end.seq : i
-    if (seq >= bestSeq) {
-      bestSeq = seq
-      best = kindHere
-    }
-  }
-  return best === null ? undefined : best
+/**
+ * 从 legacy.nodes（扁平 data 数组）取最后一个终态。
+ */
+function lastTerminalFromLegacyNodes(legacyNodes) {
+  if (!Array.isArray(legacyNodes) || legacyNodes.length === 0) return undefined
+  var last = legacyNodes[legacyNodes.length - 1]
+  if (!last || typeof last !== 'object') return undefined
+  if (last.kind === 'turn-error') return 'error'
+  if (last.kind === 'turn-max-tokens') return 'max-tokens'
+  if (last.kind === 'assistant' && last.interrupted === true) return 'aborted'
+  return undefined
 }
 
 /**
- * FR-1 谓词。session 是会话快照对象，draft 为当前草稿文本。
- * 返回 { canResume, reason?, terminalKind? } —— reason 用于调试/tooltip。
+ * FR-1 谓词。session 是会话快照，draft 为当前草稿文本。
  */
 function canResume(session, draft) {
   if (session === null || session === undefined || typeof session !== 'object') {
@@ -98,10 +80,22 @@ function canResume(session, draft) {
       return { canResume: false, reason: 'queue-pending' }
     }
   }
-  var kind = lastTerminalKindFromNodes(session.nodes)
-  if (kind === undefined) {
-    kind = lastTerminalKind(session.turnEnds)
+
+  // 主路径：chat.nodes (Map) + chat.order。
+  var chat = session.chat
+  var kind
+  if (chat && chat.nodes && chat.order) {
+    kind = lastTerminalFromChatNodes(chat.nodes, chat.order)
   }
+  // 回退：chat.legacy.nodes。
+  if (kind === undefined && chat && chat.legacy && Array.isArray(chat.legacy.nodes)) {
+    kind = lastTerminalFromLegacyNodes(chat.legacy.nodes)
+  }
+  // 极旧回退：session.nodes（已废弃路径）。
+  if (kind === undefined && Array.isArray(session.nodes)) {
+    kind = lastTerminalFromLegacyNodes(session.nodes)
+  }
+
   if (kind === undefined) {
     return { canResume: false, reason: 'no-terminal' }
   }
@@ -113,6 +107,7 @@ function canResume(session, draft) {
 
 module.exports = {
   TERMINAL_KINDS: TERMINAL_KINDS,
-  lastTerminalKind: lastTerminalKind,
   canResume: canResume,
+  lastTerminalFromChatNodes: lastTerminalFromChatNodes,
+  lastTerminalFromLegacyNodes: lastTerminalFromLegacyNodes,
 }
