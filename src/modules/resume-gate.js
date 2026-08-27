@@ -16,6 +16,26 @@
 
 var TERMINAL_KINDS = ['aborted', 'error', 'max-tokens', 'interrupted']
 
+/**
+ * 从 nodes（会话快照的投影行）取最后一个可判定终态（v1.6.1 修复主路径）：
+ *   kind==='assistant' && interrupted:true  -> aborted
+ *   kind==='turn-error'                     -> error
+ *   kind==='turn-max-tokens'                -> max-tokens
+ * 快照上的 turnEnds 是 Map<turn, seq> 纯序号、无 reason，旧路径仅作兜底。
+ */
+function lastTerminalKindFromNodes(nodes) {
+  if (!Array.isArray(nodes)) return undefined
+  for (var i = nodes.length - 1; i >= 0; i--) {
+    var n = nodes[i]
+    if (n === null || n === undefined || typeof n !== 'object') continue
+    var kind = n.kind
+    if (kind === 'turn-error') return 'error'
+    if (kind === 'turn-max-tokens') return 'max-tokens'
+    if (kind === 'assistant' && n.interrupted === true) return 'aborted'
+  }
+  return undefined
+}
+
 /** 从 turnEnds（数组、Map 或普通对象）里取最后一条 turn/end 的 reason.kind。 */
 function lastTerminalKind(turnEnds) {
   if (turnEnds === null || turnEnds === undefined || typeof turnEnds !== 'object') return undefined
@@ -75,7 +95,10 @@ function canResume(session, draft) {
       return { canResume: false, reason: 'queue-pending' }
     }
   }
-  var kind = lastTerminalKind(session.turnEnds)
+  var kind = lastTerminalKindFromNodes(session.nodes)
+  if (kind === undefined) {
+    kind = lastTerminalKind(session.turnEnds)
+  }
   if (kind === undefined) {
     return { canResume: false, reason: 'no-terminal' }
   }

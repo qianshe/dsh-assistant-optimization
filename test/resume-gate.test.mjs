@@ -87,6 +87,20 @@ assert.equal(canResume(baseSession(), 'hello').reason, 'draft-not-empty')
   assert.equal(lastTerminalKind(mixed), 'error')
 }
 
+// 5b. REAL-WORLD SHAPE (v1.6.1 regression): snapshot turnEnds is a plain
+// Map<turn, seq> without reasons — the nodes projection must carry the verdict.
+{
+  const s = baseSession()
+  s.turnEnds = new Map([[7, 431]])
+  s.nodes = [
+    { kind: "user", anchorSeq: 1 },
+    { kind: "assistant-step" },
+    { kind: "assistant", seq: 430, interrupted: true },
+  ]
+  assert.deepEqual(canResume(s, ""), { canResume: true, terminalKind: "aborted" })
+  s.nodes = [...s.nodes, { kind: "turn-error", anchorSeq: 440 }]
+  assert.deepEqual(canResume(s, "").terminalKind, "error")
+}
 // 6. Full gate over Map-shaped turnEnds end to end.
 {
   const s = baseSession()
