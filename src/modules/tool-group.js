@@ -642,7 +642,55 @@ function cleanupStaleMarkers(root) {
 
 // ── Main scan ────────────────────────────────────────────────────────────
 
-function scanToolGroups(root) {
+// ── Incremental scan machinery ────────────────────────────────────────────
+// The scan is split into cost tiers chosen from what the mutation batch
+// actually changed. Steady-state streaming — one flow item appended at the
+// tail, or a data-state flip — must not re-run the O(body) detect+apply over
+// every group; only invalidation events (removals, batch adds, conversation
+// switches) do a full scan. This is the "compute once on open, then manage
+// only the latest group in real time" model, with a full-scan fallback for
+// anything that is not a pure single-node tail append.
+var scanStats = { full: 0, tail: 0, attr: 0, ignored: 0 };
+var lastLatest = null; // latest group (node array) after the last scan
+// Mutation batches that arrive inside one debounce window are merged here
+// (a later batch must not replace an earlier tail add): full wins over tail,
+// two distinct tail adds in one window collapse to full, and attr adds
+// nothing (the scan that runs re-evaluates state).
+var pending = null; // null | { full: bool, item: el|null }
+
+// The previous groupable tool-call before el, skipping transparent nodes;
+// null when a non-transparent non-groupable node (or the start of the column)
+// intervenes. Walking back this way yields the maximal consecutive groupable
+// run ending at the new item.
+function prevGroupableTool(el) {
+  var sibling = el.previousElementSibling;
+  while (sibling) {
+    if (isTransparentNode(sibling)) { sibling = sibling.previousElementSibling; continue; }
+    if (sibling.getAttribute &&
+        sibling.getAttribute('data-chat-flow-kind') === 'tool-call' &&
+        isGroupableTool(sibling)) return sibling;
+    return null;
+  }
+  return null;
+}
+
+// The maximal consecutive groupable run ending at endItem (walks back).
+function computeTailRun(endItem) {
+  var run = [endItem];
+  var cur = endItem;
+  while (true) {
+    var prev = prevGroupableTool(cur);
+    if (!prev) break;
+    run.unshift(prev);
+    cur = prev;
+  }
+  return run;
+}
+
+// The full O(body) pipeline: clean stale markers, re-detect every group,
+// apply them, and manage the latest. Used on invalidation and for the
+// initial load.
+function fullPipeline(root) {
   if (!root || !root.querySelectorAll) return;
   ensureStyles();
   cleanupStaleMarkers(root);
@@ -652,6 +700,129 @@ function scanToolGroups(root) {
   }
   // Auto-manage expand/collapse for the latest group only
   manageLatestGroup(groups);
+  lastLatest = groups.length ? groups[groups.length - 1] : null;
+}
+
+// Public full scan (initial load / manual / hysteresis confirm). Backward-
+// compatible shape.
+function scanToolGroups(root) {
+  fullPipeline(root);
+}
+
+function performFullScan() {
+  fullPipeline(document.body);
+  scanStats.full++;
+}
+
+// One flow item was appended at the tail: re-detect only the tail run
+// (O(run)) instead of the whole body.
+function performTailScan(item) {
+  if (!item || !item.parentNode) { performFullScan(); return; }
+  ensureStyles();
+  if (item.getAttribute &&
+      item.getAttribute('data-chat-flow-kind') === 'tool-call' &&
+      isGroupableTool(item)) {
+    var run = computeTailRun(item);
+    if (run.length >= 2) {
+      applyGroup(run);
+      lastLatest = run;
+      manageLatestGroup([run]);
+    }
+    // run.length < 2: a new singleton — the latest group is unchanged.
+  } else {
+    // A non-groupable flow item at the tail breaks the run and is now "content
+    // after" the last group → re-evaluate that group (hysteresis applies).
+    if (lastLatest && lastLatest.length) manageLatestGroup([lastLatest]);
+  }
+  scanStats.tail++;
+}
+
+// Only a data-state flipped: group membership is unchanged, so just
+// re-evaluate the latest group's expand/collapse (O(latest group)).
+function performAttrScan() {
+  if (lastLatest && lastLatest.length) manageLatestGroup([lastLatest]);
+  scanStats.attr++;
+}
+
+// Classify a mutation batch into a scan tier.
+// Returns { mode: 'full' | 'tail' | 'attr' | 'ignore', item? }.
+// Our own header writes are ignored (only applyGroup/cleanupStaleMarkers touch
+// data-dsao-tg-header), so a scan never re-triggers itself.
+function classifyMutations(mutations) {
+  var hasRemoval = false;
+  var addedFlow = [];
+  var attrState = false;
+
+  function isHeader(node) {
+    return !!(node && node.nodeType === 1 && node.getAttribute &&
+      node.getAttribute('data-dsao-tg-header') === '');
+  }
+  function isRelevantKind(node) {
+    if (!node || node.nodeType !== 1 || !node.getAttribute) return false;
+    var kind = node.getAttribute('data-chat-flow-kind');
+    return kind === 'tool-call' || kind === 'assistant-step';
+  }
+  function hasRelevantKind(node) {
+    if (!node || node.nodeType !== 1) return false;
+    if (isRelevantKind(node)) return true;
+    if (node.querySelectorAll) {
+      return node.querySelectorAll('[data-chat-flow-kind="tool-call"]').length > 0 ||
+        node.querySelectorAll('[data-chat-flow-kind="assistant-step"]').length > 0;
+    }
+    return false;
+  }
+  function collectFlow(node) {
+    if (!node || node.nodeType !== 1) return;
+    if (isRelevantKind(node)) addedFlow.push(node);
+    if (node.querySelectorAll) {
+      var tools = node.querySelectorAll('[data-chat-flow-kind="tool-call"]');
+      for (var i = 0; i < tools.length; i++) addedFlow.push(tools[i]);
+      var steps = node.querySelectorAll('[data-chat-flow-kind="assistant-step"]');
+      for (var j = 0; j < steps.length; j++) addedFlow.push(steps[j]);
+    }
+  }
+
+  for (var i = 0; i < mutations.length; i++) {
+    var m = mutations[i];
+    if (m.type === 'attributes') {
+      if (m.attributeName === 'data-state') attrState = true;
+      continue;
+    }
+    var removed = m.removedNodes;
+    if (removed) {
+      for (var k = 0; k < removed.length; k++) {
+        var rn = removed[k];
+        if (rn.nodeType !== 1) continue;
+        if (isHeader(rn)) continue; // our own cleanup — ignore
+        if (hasRelevantKind(rn)) hasRemoval = true;
+      }
+    }
+    var added = m.addedNodes;
+    if (added) {
+      for (var j = 0; j < added.length; j++) {
+        var node = added[j];
+        if (!node || node.nodeType !== 1) continue;
+        if (isHeader(node)) continue; // our own write — ignore
+        collectFlow(node);
+      }
+    }
+  }
+
+  var uniq = [];
+  for (var d = 0; d < addedFlow.length; d++) {
+    if (uniq.indexOf(addedFlow[d]) < 0) uniq.push(addedFlow[d]);
+  }
+  addedFlow = uniq;
+
+  if (hasRemoval) return { mode: 'full' };
+  if (addedFlow.length === 0) return { mode: attrState ? 'attr' : 'ignore' };
+  if (addedFlow.length > 1) return { mode: 'full' };
+  // Exactly one added flow item: incremental only if it sits at the tail of
+  // the same flow column as the existing groups.
+  var item = addedFlow[0];
+  if (nextSignificantSibling(item) !== null) return { mode: 'full' };
+  if (lastLatest && lastLatest.length && item.parentNode !== lastLatest[0].parentNode) return { mode: 'full' };
+  return { mode: 'tail', item: item };
 }
 
 // ── Observer ─────────────────────────────────────────────────────────────
@@ -662,58 +833,45 @@ function startToolGroupObserver() {
 
   var scanTimer = null;
 
-  // Check whether mutations are relevant to tool-grouping (vs typing, scrolling, etc.)
-  function hasRelevantMutation(mutations) {
-    for (var i = 0; i < mutations.length; i++) {
-      var m = mutations[i];
-      // data-state attribute changes (tool running→ok etc.)
-      if (m.type === 'attributes' && m.attributeName === 'data-state') return true;
-      // data-dsao-tg-state changes (our own expand/collapse)
-      if (m.type === 'attributes' && m.attributeName === 'data-dsao-tg-state') return true;
-      // Added/removed nodes
-      if (m.addedNodes && m.addedNodes.length > 0) {
-        for (var j = 0; j < m.addedNodes.length; j++) {
-          var node = m.addedNodes[j];
-          if (node.nodeType !== 1) continue;
-          if (node.getAttribute && (
-            node.getAttribute('data-chat-flow-kind') === 'tool-call' ||
-            node.getAttribute('data-chat-flow-kind') === 'assistant-step' ||
-            node.getAttribute('data-dsao-tg-header') === ''
-          )) return true;
-          // Container that might include relevant children
-          if (node.querySelector && (
-            node.querySelector('[data-chat-flow-kind="tool-call"]') ||
-            node.querySelector('[data-chat-flow-kind="assistant-step"]') ||
-            node.querySelector('[data-dsao-tg-header]')
-          )) return true;
-        }
-      }
-    }
-    return false;
-  }
-
   var onMutations = function (mutations) {
-    if (!hasRelevantMutation(mutations)) return;
+    var c = classifyMutations(mutations);
+    if (c.mode === 'ignore') { scanStats.ignored++; return; }
+    if (!pending) pending = { full: false, item: null };
+    if (c.mode === 'full') {
+      pending.full = true;
+    } else if (c.mode === 'tail') {
+      // Two distinct tail adds inside one window = a batch → full.
+      if (pending.item !== null) pending.full = true;
+      else pending.item = c.item;
+    }
+    // c.mode === 'attr': nothing to accumulate; the scan that runs
+    // re-evaluates the latest group's state.
     if (scanTimer) clearTimeout(scanTimer);
     scanTimer = setTimeout(function () {
       scanTimer = null;
-      scanToolGroups(document.body);
+      var done = pending;
+      pending = null;
+      if (!done) return;
+      if (done.full) performFullScan();
+      else if (done.item) performTailScan(done.item);
+      else performAttrScan();
     }, 80);
   };
 
-  // Initial scan
-  scanToolGroups(document.body);
+  // Initial scan: one full scan, caches lastLatest
+  performFullScan();
 
   var obs = new MutationObserver(onMutations);
   obs.observe(document.body, {
     childList: true,
     subtree: true,
     attributes: true,
-    attributeFilter: ['data-state', 'data-dsao-tg-state']
+    attributeFilter: ['data-state']
   });
   return function () {
     if (scanTimer) { clearTimeout(scanTimer); scanTimer = null; }
     if (confirmTimer) { clearTimeout(confirmTimer); confirmTimer = null; }
+    pending = null;
     obs.disconnect();
   };
 }
@@ -724,3 +882,5 @@ exports.detectGroups = detectGroups;
 exports.isGroupableTool = isGroupableTool;
 exports.areConsecutive = areConsecutive;
 exports.isTransparentNode = isTransparentNode;
+exports.classifyMutations = classifyMutations;
+exports.scanStats = scanStats;
