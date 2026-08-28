@@ -46,7 +46,8 @@ function makeSession(turns) {
 const u1 = node('k1', 'user', { kind: 'user' })
 const thinkOnly = node('k2', 'assistant-step', { kind: 'assistant', finalNode: { seq: 11 }, blocks: [{ kind: 'reasoning', text: 'hmm' }] })
 const tool1 = node('k3', 'tool-call', { kind: 'tool' })
-const finalStep = node('k4', 'assistant-step', { kind: 'assistant', finalNode: { seq: 22 }, blocks: [{ kind: 'text', text: 'final answer' }] })
+// closing step carries thinking + text: the thinking must stay in the fold scope
+const finalStep = node('k4', 'assistant-step', { kind: 'assistant', finalNode: { seq: 22 }, blocks: [{ kind: 'reasoning', text: 'final thinking' }, { kind: 'text', text: 'final answer' }] })
 const tail1 = node('k5', 'turn-tail', { kind: 'turn-tail', turn: 1, closing: { finalNode: { seq: 22 } } })
 
 // ── 1. Basic closed turn: process hidden, closing + user + tail kept ────
@@ -58,6 +59,7 @@ const tail1 = node('k5', 'turn-tail', { kind: 'turn-tail', turn: 1, closing: { f
   assert.equal(fold.turn, 1)
   assert.deepEqual(fold.hiddenKeys, ['k2', 'k3'])
   assert.equal(fold.anchorKey, 'k2')
+  assert.equal(fold.closingKey, 'k4')
   assert.equal(fold.reasonKind, 'completed')
   assert.equal(fold.headerText, '已完成 · 1分00秒')
   assert.ok(plan.keySet.has('k1') && plan.keySet.has('k5'))
@@ -82,6 +84,7 @@ const tail1 = node('k5', 'turn-tail', { kind: 'turn-tail', turn: 1, closing: { f
   const s = makeSession([{ num: 1, status: 'closed', startT: 0, endT: 12000, reason: 'error', nodes: [u1, thinkOnly, tool1, err, tail] }])
   const fold = planTurnFold(s).folds[0]
   assert.deepEqual(fold.hiddenKeys, ['k2', 'k3'])
+  assert.equal(fold.closingKey, null)
   assert.equal(fold.reasonKind, 'error')
   assert.equal(fold.headerText, '已出错 · 12秒')
 }
@@ -111,6 +114,7 @@ const tail1 = node('k5', 'turn-tail', { kind: 'turn-tail', turn: 1, closing: { f
   // turn 2: intermediate text step + tool are process; final answer kept
   assert.deepEqual(plan.folds[1].hiddenKeys, ['k9', 'k10'])
   assert.equal(plan.folds[1].anchorKey, 'k9')
+  assert.equal(plan.folds[1].closingKey, 'k11')
 }
 
 // ── 7. Degenerate inputs ─────────────────────────────────────────────────

@@ -77,8 +77,10 @@ function isProcessNode(node, closingSeq) {
 
 /**
  * 纯函数：从会话快照生成折叠计划。
- * 返回 { keySet: Set<key>, folds: [{ turn, hiddenKeys, anchorKey, reasonKind, label, runMs, headerText }] }
- * 只包含"有过程可折叠"的已完成 turn。
+ * 返回 { keySet: Set<key>, folds: [{ turn, hiddenKeys, anchorKey, closingKey,
+ *   reasonKind, label, runMs, headerText }] }
+ * closingKey 为该 turn 总结性回复（closing）所在 assistant-step 的 key，
+ * 折叠态下用于一并收起其内部 thinking 行。只包含"有过程可折叠"的已完成 turn。
  */
 function planTurnFold(session) {
   var plan = { keySet: null, folds: [] };
@@ -111,9 +113,14 @@ function planTurnFold(session) {
 
     var hiddenKeys = [];
     var anchorKey = null;
+    var closingKey = null;
     for (i = 0; i < keys.length; i++) {
       var node = nodes.get(keys[i]);
       if (!node) continue;
+      if (node.kind === "assistant-step" && closingSeq !== null &&
+          node.data && node.data.finalNode && node.data.finalNode.seq === closingSeq) {
+        closingKey = keys[i];
+      }
       if (isProcessNode(node, closingSeq)) {
         if (anchorKey === null) anchorKey = keys[i];
         hiddenKeys.push(keys[i]);
@@ -131,6 +138,7 @@ function planTurnFold(session) {
       turn: turnNum,
       hiddenKeys: hiddenKeys,
       anchorKey: anchorKey,
+      closingKey: closingKey,
       reasonKind: reasonKind,
       label: label,
       runMs: runMs,
@@ -144,6 +152,7 @@ function planTurnFold(session) {
 
 var CSS = [
   "[data-dsao-tf-hidden]{display:none!important}",
+  "[data-dsao-tf-closing-folded] [data-variant=\"think\"]{display:none!important}",
   ".dsao-tf-header{display:flex;align-items:center;gap:0;padding:0;cursor:pointer;user-select:none;font-size:14px;line-height:24px;color:var(--dsw-alias-label-secondary);background:transparent;border:none;border-radius:0;min-width:0;transition:color 120ms}",
   ".dsao-tf-headerIcon{width:16px;height:16px;flex:none;display:inline-flex;align-items:center;justify-content:center;color:var(--dsw-alias-label-tertiary);margin-right:6px}",
   ".dsao-tf-headerIcon[data-state=error]{color:var(--dsw-alias-state-error-primary)}",
@@ -198,12 +207,9 @@ function createHeader(fold, doc) {
 
   var toggle = doc.createElement("span");
   toggle.className = "dsao-tf-toggle";
-  var toggleLabel = doc.createElement("span");
-  toggleLabel.textContent = "展开";
   var chevron = doc.createElement("span");
   chevron.className = "dsao-tf-chevron";
   chevron.innerHTML = CHEVRON_SVG;
-  toggle.appendChild(toggleLabel);
   toggle.appendChild(chevron);
 
   header.appendChild(icon);
@@ -218,8 +224,6 @@ function updateHeader(header, fold, expanded) {
   header.setAttribute("aria-expanded", expanded ? "true" : "false");
   var text = header.querySelector(".dsao-tf-headerText");
   if (text && text.textContent !== fold.headerText) text.textContent = fold.headerText;
-  var toggleLabel = header.querySelector(".dsao-tf-toggle > span:first-child");
-  if (toggleLabel) toggleLabel.textContent = expanded ? "收起" : "展开";
 }
 
 function findHeaderBefore(anchorEl) {
@@ -235,6 +239,8 @@ function isFlowItemEl(el) {
 function stripColumn(column) {
   var hidden = column.querySelectorAll("[data-dsao-tf-hidden]");
   for (var i = 0; i < hidden.length; i++) hidden[i].removeAttribute("data-dsao-tf-hidden");
+  var closing = column.querySelectorAll("[data-dsao-tf-closing-folded]");
+  for (var n = 0; n < closing.length; n++) closing[n].removeAttribute("data-dsao-tf-closing-folded");
   var headers = column.querySelectorAll("[data-dsao-tf-header]");
   for (var j = 0; j < headers.length; j++) {
     if (headers[j].parentNode) headers[j].parentNode.removeChild(headers[j]);
@@ -262,12 +268,15 @@ function applyPlanToColumn(column, plan, expandedSet) {
 
   // 本轮应隐藏的 key 集合
   var toHide = {};
+  var toCloseFold = {};
   var f;
   for (f = 0; f < plan.folds.length; f++) {
     var fold = plan.folds[f];
     if (expandedSet[fold.turn]) continue;
     var hk;
     for (hk = 0; hk < fold.hiddenKeys.length; hk++) toHide[fold.hiddenKeys[hk]] = true;
+    // 折叠态下 closing 回复内的 thinking 行一并收起，只留总结性回复正文
+    if (fold.closingKey) toCloseFold[fold.closingKey] = true;
   }
 
   // 隐藏/恢复 flowItem
@@ -278,6 +287,11 @@ function applyPlanToColumn(column, plan, expandedSet) {
       if (!el.hasAttribute("data-dsao-tf-hidden")) el.setAttribute("data-dsao-tf-hidden", "");
     } else if (el.hasAttribute("data-dsao-tf-hidden")) {
       el.removeAttribute("data-dsao-tf-hidden");
+    }
+    if (toCloseFold[k2]) {
+      if (!el.hasAttribute("data-dsao-tf-closing-folded")) el.setAttribute("data-dsao-tf-closing-folded", "");
+    } else if (el.hasAttribute("data-dsao-tf-closing-folded")) {
+      el.removeAttribute("data-dsao-tf-closing-folded");
     }
   }
 

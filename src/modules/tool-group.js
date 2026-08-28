@@ -298,13 +298,9 @@ function createHeader(group) {
   // Toggle (matches .o3BgMG_chevron style)
   var toggle = document.createElement('span');
   toggle.className = 'dsao-tg-toggle';
-  var toggleLabel = document.createElement('span');
-  toggleLabel.setAttribute('data-dsao-tg-toggle-label', '');
-  toggleLabel.textContent = '\u5C55\u5F00';
   var chevron = document.createElement('span');
   chevron.className = 'dsao-tg-chevron';
   chevron.innerHTML = CHEVRON_SVG;
-  toggle.appendChild(toggleLabel);
   toggle.appendChild(chevron);
 
   header.appendChild(icon);
@@ -325,8 +321,6 @@ function applyCollapse(header, group) {
   }
   var summary = header.querySelector('[data-dsao-tg-summary]');
   if (summary) summary.textContent = summaryText(group);
-  var toggleLabel = header.querySelector('[data-dsao-tg-toggle-label]');
-  if (toggleLabel) toggleLabel.textContent = '\u5C55\u5F00';
 }
 
 function applyExpand(header, group) {
@@ -335,8 +329,6 @@ function applyExpand(header, group) {
   for (var i = 0; i < group.length; i++) {
     group[i].removeAttribute('data-dsao-tg-collapsed');
   }
-  var toggleLabel = header.querySelector('[data-dsao-tg-toggle-label]');
-  if (toggleLabel) toggleLabel.textContent = '\u6536\u8D77';
 }
 
 function toggleGroup(header, group) {
