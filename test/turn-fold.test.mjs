@@ -157,4 +157,43 @@ assert.equal(terminalLabel('max-tokens'), '已截断')
 assert.equal(terminalLabel('whatever'), '已完成')
 assert.equal(TERMINAL_LABELS.completed, '已完成')
 
+// ── 11. runs: 运行中 turn 的「运行中」行锚点 ─────────────────────────────
+{
+  // 运行中 turn：user + streaming assistant → 锚到第一个过程节点前（before=true）
+  const u = node('ru1', 'user', { kind: 'user' })
+  const streaming = node('ru2', 'assistant-step', { kind: 'assistant', finalNode: undefined, blocks: [{ kind: 'reasoning', text: '...' }] })
+  const tool = node('ru3', 'tool-call', { kind: 'tool' })
+  const s = makeSession([{ num: 9, status: 'open', startT: 1000000, nodes: [u, streaming, tool] }])
+  const plan = planTurnFold(s)
+  assert.equal(plan.folds.length, 0) // 运行中不生成折叠
+  assert.equal(plan.runs.length, 1)
+  const run = plan.runs[0]
+  assert.equal(run.turn, 9)
+  assert.equal(run.anchorKey, 'ru2') // 第一个过程节点
+  assert.equal(run.before, true)
+  assert.equal(run.startTime, 1000000)
+}
+
+{
+  // 运行中 turn：只有 user（尚无过程节点）→ 锚到该 turn 最后一个节点之后（before=false）
+  const u = node('rd1', 'user', { kind: 'user' })
+  const s = makeSession([{ num: 8, status: 'open', startT: 500000, nodes: [u] }])
+  const plan = planTurnFold(s)
+  assert.equal(plan.runs.length, 1)
+  assert.equal(plan.runs[0].anchorKey, 'rd1')
+  assert.equal(plan.runs[0].before, false)
+}
+
+// 运行中 turn 无 start → 不进 runs；closed turn 不进 runs
+{
+  const u = node('rx1', 'user', { kind: 'user' })
+  const s = makeSession([{ num: 8, status: 'open', nodes: [u] }]) // 无 startT
+  assert.equal(planTurnFold(s).runs.length, 0)
+}
+{
+  const u = node('ry1', 'user', { kind: 'user' })
+  const s = makeSession([{ num: 1, status: 'closed', startT: 0, endT: 1000, nodes: [u] }])
+  assert.equal(planTurnFold(s).runs.length, 0)
+}
+
 console.log('turn-fold: all assertions passed')

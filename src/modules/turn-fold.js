@@ -1,9 +1,11 @@
-// turn-fold.js — 已完成 turn 的过程内容自动折叠（codex 风格）
+// turn-fold.js — turn 过程折叠（codex 风格）
 //
 // 行为规格：
-//   · turn 运行中：不动（官方 "Deep diving…" + 计时行即"运行中+时间"显示）
-//   · turn 结束（turn-tail 节点出现 = 结论来了）：自动收起该 turn 的过程节点
-//     （thinking、工具调用、中间正文、重试/上下文行），只保留：
+//   · turn 运行中：在该 turn 内容顶部注入「运行中 · 计时」行（每秒跳动，
+//     不折叠内容）。不依赖 DSH 底部 "Deep diving…" 行（它计时要 15 秒才显示）。
+//   · turn 结束（turn-tail 节点出现 = 结论来了）：运行中行移除，自动收起
+//     该 turn 的过程节点（thinking、工具调用、中间正文、重试/上下文行），
+//     只保留：
 //       - 一行折叠头「已完成 · 时长」（出错/停止的 turn 显示对应状态，可点开）
 //       - 该 turn 的总结性回复（官方 turn-tail.closing 定位的最后一条含文本回复）
 //       - 用户消息（user / steering / command）与结果行（turn-error 等）
@@ -77,13 +79,16 @@ function isProcessNode(node, closingSeq) {
 
 /**
  * 纯函数：从会话快照生成折叠计划。
- * 返回 { keySet: Set<key>, folds: [{ turn, hiddenKeys, anchorKey, closingKey,
- *   reasonKind, label, runMs, headerText }] }
- * closingKey 为该 turn 总结性回复（closing）所在 assistant-step 的 key，
- * 折叠态下用于一并收起其内部 thinking 行。只包含"有过程可折叠"的已完成 turn。
+ * 返回 { keySet: Set<key>, folds: [...], runs: [...] }
+ * folds: [{ turn, hiddenKeys, anchorKey, closingKey, reasonKind, label, runMs, headerText }]
+ *   closingKey 为该 turn 总结性回复（closing）所在 assistant-step 的 key，
+ *   折叠态下用于一并收起其内部 thinking 行。只包含"有过程可折叠"的已完成 turn。
+ * runs: [{ turn, startTime, anchorKey, before }] —— 运行中 turn：
+ *   anchorKey/before 为「运行中」行的插入锚点（第一个过程节点前；
+ *   尚无过程节点时锚到该 turn 最后一个节点之后）。
  */
 function planTurnFold(session) {
-  var plan = { keySet: null, folds: [] };
+  var plan = { keySet: null, folds: [], runs: [] };
   if (!session || typeof session !== "object") return plan;
   var chat = session.chat;
   if (!chat) return plan;
@@ -96,13 +101,35 @@ function planTurnFold(session) {
   if (!timeline || !timeline.turns || typeof timeline.turns.forEach !== "function") return plan;
 
   timeline.turns.forEach(function (turn, turnNum) {
-    if (!turn || turn.status !== "closed") return;
+    if (!turn) return;
     var keys = locations && typeof locations.getTurn === "function" ? locations.getTurn(turnNum) : null;
     if (!keys || keys.length === 0) return;
+    var i;
+
+    // 运行中 turn：注入「运行中 · 计时」行的锚点
+    if (turn.status === "open" && turn.start && typeof turn.start.time === "number") {
+      var runAnchor = null;
+      var runBefore = true;
+      for (i = 0; i < keys.length; i++) {
+        var rn = nodes.get(keys[i]);
+        if (rn && isProcessNode(rn, null)) { runAnchor = keys[i]; break; }
+      }
+      if (runAnchor === null) {
+        runBefore = false;
+        for (i = keys.length - 1; i >= 0; i--) {
+          if (nodes.get(keys[i])) { runAnchor = keys[i]; break; }
+        }
+      }
+      if (runAnchor !== null) {
+        plan.runs.push({ turn: turnNum, startTime: turn.start.time, anchorKey: runAnchor, before: runBefore });
+      }
+      return;
+    }
+
+    if (turn.status !== "closed") return;
 
     // 总结性回复：turn-tail data.closing（官方定位：最后一条含文本的 assistant-step）
     var closingSeq = null;
-    var i;
     for (i = 0; i < keys.length; i++) {
       var n = nodes.get(keys[i]);
       if (n && n.kind === "turn-tail" && n.data && n.data.closing && n.data.closing.finalNode) {
@@ -153,6 +180,11 @@ function planTurnFold(session) {
 var CSS = [
   "[data-dsao-tf-hidden]{display:none!important}",
   "[data-dsao-tf-closing-folded] [data-variant=\"think\"]{display:none!important}",
+  "@keyframes dsao-tf-pulse{0%,100%{opacity:.35}50%{opacity:1}}",
+  ".dsao-tf-running{display:flex;align-items:center;gap:0;padding:0;cursor:default;user-select:none;font-size:14px;line-height:24px;color:var(--dsw-alias-label-secondary);background:transparent;min-width:0}",
+  ".dsao-tf-runningIcon{width:16px;height:16px;flex:none;display:inline-flex;align-items:center;justify-content:center;color:var(--dsw-alias-brand-primary);margin-right:6px}",
+  ".dsao-tf-runningDot{width:8px;height:8px;border-radius:50%;background:currentColor;animation:dsao-tf-pulse 1.2s ease-in-out infinite}",
+  ".dsao-tf-runningText{font-weight:400;white-space:nowrap;min-width:0}",
   ".dsao-tf-header{display:flex;align-items:center;gap:0;padding:0;cursor:pointer;user-select:none;font-size:14px;line-height:24px;color:var(--dsw-alias-label-secondary);background:transparent;border:none;border-radius:0;min-width:0;transition:color 120ms}",
   ".dsao-tf-headerIcon{width:16px;height:16px;flex:none;display:inline-flex;align-items:center;justify-content:center;color:var(--dsw-alias-label-tertiary);margin-right:6px}",
   ".dsao-tf-headerIcon[data-state=error]{color:var(--dsw-alias-state-error-primary)}",
@@ -236,6 +268,60 @@ function isFlowItemEl(el) {
   return !!(el && el.getAttribute && el.getAttribute("data-chat-flow-key") !== null);
 }
 
+/** 创建「运行中 · 计时」行（纯状态展示，不可点）。计时文本由 tick 每秒刷新。 */
+function createRunningRow(run, doc) {
+  var row = doc.createElement("div");
+  row.className = "dsao-tf-running";
+  row.setAttribute("data-dsao-tf-running", String(run.turn));
+  row.setAttribute("data-dsao-tf-start", String(run.startTime));
+  row.setAttribute("role", "status");
+  row.setAttribute("aria-live", "polite");
+
+  var icon = doc.createElement("span");
+  icon.className = "dsao-tf-runningIcon";
+  var dot = doc.createElement("span");
+  dot.className = "dsao-tf-runningDot";
+  icon.appendChild(dot);
+
+  var text = doc.createElement("span");
+  text.className = "dsao-tf-runningText";
+  text.textContent = runningText(run.startTime);
+
+  row.appendChild(icon);
+  row.appendChild(text);
+  return row;
+}
+
+function runningText(startTime) {
+  return "运行中 · " + formatDuration(Math.max(0, Date.now() - startTime));
+}
+
+/**
+ * 幂等收敛运行中行：不存在则创建到锚点位置；位置漂移则移动；
+ * 起点变化则更新 data-dsao-tf-start。before=true 插在 anchor 前，
+ * 否则插在 anchor 后（anchor 是该 turn 最后一个节点）。
+ */
+function ensureRunningRow(column, run, anchorEl) {
+  var existing = column.querySelector('[data-dsao-tf-running="' + run.turn + '"]');
+  if (run.before) {
+    if (!existing) {
+      column.insertBefore(createRunningRow(run, column.ownerDocument), anchorEl);
+    } else if (anchorEl.previousElementSibling !== existing) {
+      column.insertBefore(existing, anchorEl);
+    }
+  } else {
+    if (!existing) {
+      column.insertBefore(createRunningRow(run, column.ownerDocument), anchorEl.nextElementSibling);
+    } else if (anchorEl.nextElementSibling !== existing) {
+      column.insertBefore(existing, anchorEl.nextElementSibling);
+    }
+  }
+  var live = column.querySelector('[data-dsao-tf-running="' + run.turn + '"]');
+  if (live && live.getAttribute("data-dsao-tf-start") !== String(run.startTime)) {
+    live.setAttribute("data-dsao-tf-start", String(run.startTime));
+  }
+}
+
 function stripColumn(column) {
   var hidden = column.querySelectorAll("[data-dsao-tf-hidden]");
   for (var i = 0; i < hidden.length; i++) hidden[i].removeAttribute("data-dsao-tf-hidden");
@@ -244,6 +330,10 @@ function stripColumn(column) {
   var headers = column.querySelectorAll("[data-dsao-tf-header]");
   for (var j = 0; j < headers.length; j++) {
     if (headers[j].parentNode) headers[j].parentNode.removeChild(headers[j]);
+  }
+  var running = column.querySelectorAll("[data-dsao-tf-running]");
+  for (var r = 0; r < running.length; r++) {
+    if (running[r].parentNode) running[r].parentNode.removeChild(running[r]);
   }
   var tg = column.querySelectorAll("[data-dsao-tg-header][data-dsao-tf-hidden]");
   for (var k = 0; k < tg.length; k++) tg[k].removeAttribute("data-dsao-tf-hidden");
@@ -334,6 +424,22 @@ function applyPlanToColumn(column, plan, expandedSet) {
     var turnNum = parseInt(stale[s2].getAttribute("data-dsao-tf-header"), 10);
     if (!seenTurns[turnNum] && stale[s2].parentNode) stale[s2].parentNode.removeChild(stale[s2]);
   }
+
+  // 运行中行：创建/移动/清理（turn 结束 → 该行移除，由折叠头接替）
+  var seenRuns = {};
+  var r;
+  for (r = 0; r < plan.runs.length; r++) {
+    var run = plan.runs[r];
+    seenRuns[run.turn] = true;
+    var runAnchor = byKey[run.anchorKey];
+    if (!runAnchor) continue;
+    ensureRunningRow(column, run, runAnchor);
+  }
+  var staleRuns = column.querySelectorAll("[data-dsao-tf-running]");
+  for (var sr = 0; sr < staleRuns.length; sr++) {
+    var rturn = parseInt(staleRuns[sr].getAttribute("data-dsao-tf-running"), 10);
+    if (!seenRuns[rturn] && staleRuns[sr].parentNode) staleRuns[sr].parentNode.removeChild(staleRuns[sr]);
+  }
 }
 
 // ── React 挂载 ────────────────────────────────────────────────────────────
@@ -414,6 +520,17 @@ function createTurnFold(React) {
       });
       obs.observe(doc.body, { childList: true, subtree: true });
 
+      // 运行中行的计时每秒跳动（读取 data-dsao-tf-start，无运行中行时零开销）
+      var tickTimer = setInterval(function () {
+        var rows = doc.querySelectorAll("[data-dsao-tf-running]");
+        for (var i = 0; i < rows.length; i++) {
+          var start = parseInt(rows[i].getAttribute("data-dsao-tf-start"), 10);
+          if (isNaN(start)) continue;
+          var textEl = rows[i].querySelector(".dsao-tf-runningText");
+          if (textEl) textEl.textContent = runningText(start);
+        }
+      }, 1000);
+
       // 折叠头点击（事件委托，避免重复绑定）
       function onClick(e) {
         var target = e.target;
@@ -454,6 +571,7 @@ function createTurnFold(React) {
       return function () {
         if (timer !== null) clearTimeout(timer);
         timer = null;
+        clearInterval(tickTimer);
         obs.disconnect();
         doc.removeEventListener("click", onClick);
         doc.removeEventListener("keydown", onKeydown);
@@ -498,7 +616,7 @@ function createTurnFoldSetting(React) {
 
     var leftCol = React.createElement("div", { style: { flex: "1 1 auto", minWidth: "0" } },
       React.createElement("div", { style: titleStyle }, "Turn Folding"),
-      React.createElement("div", { style: descStyle }, "已完成回合自动收起过程（思考、工具调用），只留一行「已完成 · 时长」和总结回复；运行中不折叠"));
+      React.createElement("div", { style: descStyle }, "运行中在回合顶部显示「运行中 · 计时」；完成后自动收起过程（思考、工具调用），只留一行「已完成 · 时长」和总结回复"));
     var rightCol = React.createElement("input", {
       type: "checkbox",
       checked: enabled,
@@ -521,5 +639,8 @@ exports.isProcessNode = isProcessNode;
 exports.planTurnFold = planTurnFold;
 exports.ensureStyles = ensureStyles;
 exports.applyPlanToColumn = applyPlanToColumn;
+exports.createRunningRow = createRunningRow;
+exports.ensureRunningRow = ensureRunningRow;
+exports.runningText = runningText;
 exports.createTurnFold = createTurnFold;
 exports.createTurnFoldSetting = createTurnFoldSetting;
