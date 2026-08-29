@@ -374,6 +374,7 @@ function createHeader(fold, doc) {
   header.className = "dsao-tf-header";
   header.setAttribute("data-dsao-tf-header", String(fold.turn));
   header.setAttribute("data-dsao-tf-state", "collapsed");
+  header.setAttribute("data-dsao-tf-reason", fold.reasonKind);
   header.setAttribute("role", "button");
   header.setAttribute("tabindex", "0");
   header.setAttribute("aria-expanded", "false");
@@ -411,6 +412,18 @@ function updateHeader(header, fold, expanded) {
   header.setAttribute("aria-expanded", expanded ? "true" : "false");
   var text = header.querySelector(".dsao-tf-headerText");
   if (text && text.textContent !== fold.headerText) text.textContent = fold.headerText;
+  header.setAttribute("aria-label", fold.headerText);
+  // 状态图标随 reasonKind 同步刷新：折叠头可能在早期状态创建（如中间段
+  // 单独成组时是「已出错」红点），链归并后状态取末段（已完成），文案换而
+  // 图标滞留会出现「红点 + 已完成」错位。
+  if (header.getAttribute("data-dsao-tf-reason") !== fold.reasonKind) {
+    header.setAttribute("data-dsao-tf-reason", fold.reasonKind);
+    var icon = header.querySelector(".dsao-tf-headerIcon");
+    if (icon) {
+      icon.setAttribute("data-state", fold.reasonKind === "error" ? "error" : "ok");
+      icon.innerHTML = iconForReason(fold.reasonKind);
+    }
+  }
 }
 
 function findHeaderBefore(anchorEl) {
