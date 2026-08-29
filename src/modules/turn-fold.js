@@ -165,6 +165,7 @@ function mergeResumeFolds(plan, nodes, locations, turnMeta) {
     var eFold = foldByTurn[eTurn];
     var hiddenKeys = [];
     var hiddenSeen = {};
+    var chainSteering = 0;
     for (var g = 0; g < chain.length; g++) {
       var t = chain[g];
       var keys = keysOf(t);
@@ -175,9 +176,10 @@ function mergeResumeFolds(plan, nodes, locations, turnMeta) {
         var node = nodes.get(key);
         var markerUser = !!node && node.kind === "user" && isResumeMarkerNode(node);
         var realUser = !!node && node.kind === "user" && !markerUser;
-        // 非末段：只留真实输入；末段：marker 收起，closing/tail/error 保留，
+        if (node && node.kind === "steering") chainSteering++;
+        // 非末段：只留真实输入；末段：marker 与插话收起，closing/tail/error 保留，
         // 过程沿用 eFold.hiddenKeys（补入集合）。
-        var keep = isFinalSeg ? !markerUser : realUser;
+        var keep = isFinalSeg ? (!markerUser && node.kind !== "steering") : realUser;
         if (!keep && !hiddenSeen[key]) {
           hiddenSeen[key] = true;
           hiddenKeys.push(key);
@@ -205,7 +207,8 @@ function mergeResumeFolds(plan, nodes, locations, turnMeta) {
       reasonKind: eMeta.reasonKind,
       label: label,
       runMs: totalMs,
-      headerText: label + (totalMs !== null ? " · " + formatDuration(totalMs) : "")
+      headerText: label + (totalMs !== null ? " · " + formatDuration(totalMs) : "") +
+        (chainSteering > 0 ? " · " + chainSteering + " 条插话" : "")
     });
     // 位置域归属整链改写到组 id（tg 头隐藏依赖它）
     for (g = 0; g < chain.length; g++) {
@@ -292,6 +295,7 @@ function planTurnFold(session) {
     var hiddenKeys = [];
     var anchorKey = null;
     var closingKey = null;
+    var steeringCount = 0;
     for (i = 0; i < keys.length; i++) {
       var node = nodes.get(keys[i]);
       if (!node) continue;
@@ -299,8 +303,12 @@ function planTurnFold(session) {
           node.data && node.data.finalNode && node.data.finalNode.seq === closingSeq) {
         closingKey = keys[i];
       }
-      if (isProcessNode(node, closingSeq)) {
+      // 运行中插话（steering）随组收起：折叠时它是组内叙事的一部分，展开后
+      // 原位恢复（时间线不变，codex 同权语义）；command/context 是显式调用/
+      // 注入上下文，保持可见。
+      if (isProcessNode(node, closingSeq) || node.kind === "steering") {
         if (anchorKey === null) anchorKey = keys[i];
+        if (node.kind === "steering") steeringCount++;
         hiddenKeys.push(keys[i]);
       }
     }
@@ -317,7 +325,8 @@ function planTurnFold(session) {
       reasonKind: reasonKind,
       label: label,
       runMs: runMs,
-      headerText: label + (runMs !== null ? " · " + formatDuration(runMs) : "")
+      headerText: label + (runMs !== null ? " · " + formatDuration(runMs) : "") +
+        (steeringCount > 0 ? " · " + steeringCount + " 条插话" : "")
     });
   });
   mergeResumeFolds(plan, nodes, locations, turnMeta);

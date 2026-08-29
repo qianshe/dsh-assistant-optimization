@@ -287,4 +287,54 @@ assert.equal(isResumeMarkerNode(null), false)
   assert.equal(plan.turnOf.get('q4'), 1)
 }
 
+// ── 16. 运行中插话（steering）随折叠收起 + 头计数 ───────────────────────
+{
+  const u = node('w0', 'user', { kind: 'user' })
+  const tool1 = node('w1', 'tool-call', { kind: 'tool' })
+  const steer = node('w2', 'steering', { kind: 'user', content: [{ type: 'text', text: '补充一下' }] })
+  const tool2 = node('w3', 'tool-call', { kind: 'tool' })
+  const finalStep = node('w4', 'assistant-step', { kind: 'assistant', finalNode: { seq: 101 }, blocks: [{ kind: 'text', text: 'done' }] })
+  const tail = node('w5', 'turn-tail', { kind: 'turn-tail', turn: 1, closing: { finalNode: { seq: 101 } } })
+  const s = makeSession([{ num: 1, status: 'closed', startT: 0, endT: 60000, nodes: [u, tool1, steer, tool2, finalStep, tail] }])
+  const plan = planTurnFold(s)
+  assert.equal(plan.folds.length, 1)
+  const f = plan.folds[0]
+  assert.deepEqual(f.hiddenKeys, ['w1', 'w2', 'w3'])
+  assert.equal(f.anchorKey, 'w1')
+  assert.equal(f.headerText, '已完成 · 1分00秒 · 1 条插话')
+}
+// 插话先于一切过程节点 → 锚点取插话，且仅凭插话也可成组
+{
+  const u = node('x0', 'user', { kind: 'user' })
+  const steer = node('x1', 'steering', { kind: 'user', content: [] })
+  const finalStep = node('x2', 'assistant-step', { kind: 'assistant', finalNode: { seq: 111 }, blocks: [{ kind: 'text', text: 'ok' }] })
+  const tail = node('x3', 'turn-tail', { kind: 'turn-tail', turn: 1, closing: { finalNode: { seq: 111 } } })
+  const s = makeSession([{ num: 1, status: 'closed', startT: 0, endT: 5000, nodes: [u, steer, finalStep, tail] }])
+  const f = planTurnFold(s).folds[0]
+  assert.deepEqual(f.hiddenKeys, ['x1'])
+  assert.equal(f.anchorKey, 'x1')
+  assert.equal(f.headerText, '已完成 · 5秒 · 1 条插话')
+}
+
+// ── 17. 链归并末段的插话同样收起并计入 ─────────────────────────────────
+{
+  const u = node('y0', 'user', { kind: 'user' })
+  const tool1 = node('y1', 'tool-call', { kind: 'tool' })
+  const tailA = node('y2', 'turn-tail', { kind: 'turn-tail', turn: 1, closing: null })
+  const marker = node('y3', 'user', { kind: 'user', source: { dsaoResume: true }, content: [] })
+  const steer = node('y4', 'steering', { kind: 'user', content: [] })
+  const finalStep = node('y5', 'assistant-step', { kind: 'assistant', finalNode: { seq: 121 }, blocks: [{ kind: 'text', text: 'done' }] })
+  const tailB = node('y6', 'turn-tail', { kind: 'turn-tail', turn: 2, closing: { finalNode: { seq: 121 } } })
+  const s = makeSession([
+    { num: 1, status: 'closed', startT: 0, endT: 5000, reason: 'aborted', nodes: [u, tool1, tailA] },
+    { num: 2, status: 'closed', startT: 6000, endT: 66000, nodes: [marker, steer, finalStep, tailB] },
+  ])
+  const plan = planTurnFold(s)
+  assert.equal(plan.folds.length, 1)
+  const f = plan.folds[0]
+  assert.deepEqual(f.hiddenKeys, ['y1', 'y2', 'y3', 'y4'])
+  assert.equal(f.closingKey, 'y5')
+  assert.equal(f.headerText, '已完成 · 1分05秒 · 1 条插话')
+}
+
 console.log('turn-fold: all assertions passed')

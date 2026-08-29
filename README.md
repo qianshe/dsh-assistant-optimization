@@ -57,7 +57,7 @@ When a conversation stops abnormally — the user clicks **Stop** or the session
 
 ### Turn folding
 
-While a turn runs, everything stays visible — the native "Deep diving…" status with its clock is the running indicator. The moment the turn completes (the final answer lands), the process content of that turn — thinking rows, tool calls, intermediate text — collapses into a single header line: **已完成 · 时长** (errored/stopped turns show 已出错/已停止 instead). What stays visible: your prompt, the final summary reply, and its action row (copy etc.). Click the header to expand the full process; click again to collapse. Expand/collapse choices live in memory only; a fresh page load starts collapsed.
+While a turn runs, everything stays visible — the native "Deep diving…" status with its clock is the running indicator. The moment the turn completes (the final answer lands), the process content of that turn — thinking rows, tool calls, intermediate text — collapses into a single header line: **已完成 · 时长** (errored/stopped turns show 已出错/已停止 instead). Mid-run steering interjections collapse with the turn; the header shows「· N 条插话」when present. What stays visible: your prompt, the final summary reply, and its action row (copy etc.). Click the header to expand the full process; click again to collapse. Expand/collapse choices live in memory only; a fresh page load starts collapsed.
 
 The plan is computed entirely from the session snapshot: turn grouping via `chat.locations`, completion via the turn's `turn/end` reason, the summary reply via the official `turn-tail` node's `closing` pointer, duration from the turn's start/end timestamps (same figures the native clock shows). Toggle under **Settings → General → Turn Folding**.
 

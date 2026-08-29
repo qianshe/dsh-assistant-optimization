@@ -55,6 +55,10 @@ function makeSession(turnSpecs) {
       const k = K(spec.keyPrefix + 't');
       order.push(k); nodes.set(k, { kind: 'tool-call', data: {} }); keys.push(k);
     }
+    if (spec.steering) {
+      const sk = K(spec.keyPrefix + 's');
+      order.push(sk); nodes.set(sk, { kind: 'steering', data: {} }); keys.push(sk);
+    }
     const closingSeq = ++seq * 1000;
     const ak = K(spec.keyPrefix + 'a');
     order.push(ak); nodes.set(ak, { kind: 'assistant-step', data: { finalNode: { seq: closingSeq } } }); keys.push(ak);
@@ -504,6 +508,35 @@ console.log('── 场景 10：状态图标随归并刷新 ──');
     console.log('✗ [场景 10] 图标未随归并刷新（红点 + 已完成 错位）');
   } else {
     console.log('✓ [场景 10] 图标随归并刷新为已完成');
+  }
+}
+
+// 场景 11：运行中插话（steering）随折叠收起，展开恢复（codex 调研后的设计）
+console.log('── 场景 11：运行中插话随折叠收起 ──');
+{
+  const sessionST = makeSession([
+    { tools: 2, start: 0, end: 60000, keyPrefix: 'ST', steering: true },
+  ]);
+  renderItems(column, sessionST);
+  tg.scanToolGroups(doc.body);
+  const planST = tf.planTurnFold(sessionST);
+  // 键序：user, t, t, steering, closing, tail
+  const stKey = sessionST.chat.locations.getTurn(0)[3];
+  const inHidden = planST.folds.length === 1 && planST.folds[0].hiddenKeys.indexOf(stKey) >= 0;
+  const headerST = planST.folds.length ? planST.folds[0].headerText : '';
+  console.log(`  计划：插话入隐藏集=${inHidden}，头="${headerST}"`);
+  tf.applyPlanToColumn(column, planST, {});
+  const stEl = column.querySelector(`[data-chat-flow-key="${stKey}"]`);
+  const collapsedHidden = stEl && stEl.hasAttribute('data-dsao-tf-hidden');
+  tf.applyPlanToColumn(column, planST, { 0: true });
+  const expandedVisible = stEl && !stEl.hasAttribute('data-dsao-tf-hidden');
+  tf.applyPlanToColumn(column, planST, {});
+  const recollapsed = stEl && stEl.hasAttribute('data-dsao-tf-hidden');
+  if (!inHidden || headerST.indexOf('1 条插话') < 0 || !collapsedHidden || !expandedVisible || !recollapsed) {
+    failures++;
+    console.log(`✗ [场景 11] 插话折叠行为异常（隐藏集=${inHidden} 折叠=${collapsedHidden} 展开=${expandedVisible} 再收起=${recollapsed}）`);
+  } else {
+    console.log('✓ [场景 11] 插话折叠收起、展开恢复、头含计数');
   }
 }
 
