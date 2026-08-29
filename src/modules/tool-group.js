@@ -236,7 +236,7 @@ function areConsecutive(a, b) {
 
   var sibling = a.nextElementSibling;
   while (sibling && sibling !== b) {
-    if (!isTransparentNode(sibling)) return false;
+    if (!isTransparentNode(sibling) && !isTurnFoldHeader(sibling)) return false;
     sibling = sibling.nextElementSibling;
   }
   return sibling === b;
@@ -338,15 +338,28 @@ function toggleGroup(header, group) {
 }
 
 /**
+ * Check whether an element is a turn-fold header (inserted by the turn-fold
+ * module between flow items). Tool-group must skip these when locating its
+ * own headers and group items, because turn-fold inserts at the same anchor
+ * position (before the first process node of a turn).
+ */
+function isTurnFoldHeader(el) {
+  return !!(el && el.getAttribute && el.getAttribute('data-dsao-tf-header') !== null);
+}
+
+/**
  * Walk forward from a header element to collect the current group items
  * from the live DOM. Used at toggle-click time to avoid stale closures.
  * Returns an array of groupable tool-call flow items (length >= 2).
+ *
+ * Skips turn-fold headers (data-dsao-tf-header) that may sit between our
+ * header and the first tool-call item.
  */
 function collectGroupFromHeader(header) {
   var items = [];
   var node = header.nextElementSibling;
   while (node) {
-    if (isTransparentNode(node)) { node = node.nextElementSibling; continue; }
+    if (isTransparentNode(node) || isTurnFoldHeader(node)) { node = node.nextElementSibling; continue; }
     if (!node.getAttribute || node.getAttribute('data-chat-flow-kind') !== 'tool-call') break;
     if (!isGroupableTool(node)) break;
     items.push(node);
@@ -382,9 +395,18 @@ function unmarkGroupItem(el) {
  */
 function applyGroup(group) {
   var first = group[0];
+  // Walk backward past non-flow-item siblings (e.g. turn-fold headers)
+  // to find an existing tool-group header. NOTE: getAttribute returns "" when
+  // the attribute is present and null when absent — must compare against null,
+  // otherwise the walk skips past our own headers and never finds them.
   var existingHeader = first.previousElementSibling;
-  var headerExists = existingHeader && existingHeader.getAttribute &&
-    existingHeader.getAttribute('data-dsao-tg-header') === '';
+  while (existingHeader) {
+    if (existingHeader.getAttribute && existingHeader.getAttribute('data-dsao-tg-header') !== null) break;
+    if (existingHeader.getAttribute && existingHeader.getAttribute('data-chat-flow-key') !== null) { existingHeader = null; break; }
+    existingHeader = existingHeader.previousElementSibling;
+  }
+  var headerExists = !!(existingHeader && existingHeader.getAttribute &&
+    existingHeader.getAttribute('data-dsao-tg-header') === '');
 
   // If group size changed, remove old header and re-create
   var isRebuild = false;
@@ -571,7 +593,7 @@ function manageLatestGroup(groups) {
 function nextSignificantSibling(el) {
   var sibling = el.nextElementSibling;
   while (sibling) {
-    if (isTransparentNode(sibling)) {
+    if (isTransparentNode(sibling) || isTurnFoldHeader(sibling)) {
       sibling = sibling.nextElementSibling;
       continue;
     }
@@ -581,13 +603,13 @@ function nextSignificantSibling(el) {
 }
 
 /**
- * Walk backward from `el`, skipping transparent nodes, and return
- * the previous "significant" element sibling (or null).
+ * Walk backward from `el`, skipping transparent nodes and turn-fold headers,
+ * and return the previous "significant" element sibling (or null).
  */
 function prevSignificantSibling(el) {
   var sibling = el.previousElementSibling;
   while (sibling) {
-    if (isTransparentNode(sibling)) {
+    if (isTransparentNode(sibling) || isTurnFoldHeader(sibling)) {
       sibling = sibling.previousElementSibling;
       continue;
     }
@@ -632,6 +654,35 @@ function cleanupStaleMarkers(root) {
   }
 }
 
+// ── Session-switch reset ─────────────────────────────────────────────────
+
+/**
+ * Remove every tool-group injection from the live DOM and drop the
+ * module-level state that still references the previous session's nodes.
+ *
+ * Injected headers are foreign nodes React never owns: on a conversation
+ * switch React replaces only its keyed children, so our headers survive in
+ * place and pile into the new session's column (turn numbers/positions then
+ * read as garbage). The turn-fold mount calls this when the session changes,
+ * then re-runs scanToolGroups to rebuild headers for the current DOM.
+ */
+function resetToolGroups() {
+  pendingSignal = null;
+  if (confirmTimer) { clearTimeout(confirmTimer); confirmTimer = null; }
+  pending = null;
+  lastLatest = null;
+  if (typeof document === 'undefined') return;
+  var headers = document.querySelectorAll('[data-dsao-tg-header]');
+  for (var i = 0; i < headers.length; i++) {
+    if (headers[i].parentNode) headers[i].parentNode.removeChild(headers[i]);
+  }
+  var marked = document.querySelectorAll('[data-dsao-tg-pos],[data-dsao-tg-collapsed]');
+  for (var j = 0; j < marked.length; j++) {
+    marked[j].removeAttribute('data-dsao-tg-pos');
+    marked[j].removeAttribute('data-dsao-tg-collapsed');
+  }
+}
+
 // ── Main scan ────────────────────────────────────────────────────────────
 
 // ── Incremental scan machinery ────────────────────────────────────────────
@@ -657,7 +708,7 @@ var pending = null; // null | { full: bool, item: el|null }
 function prevGroupableTool(el) {
   var sibling = el.previousElementSibling;
   while (sibling) {
-    if (isTransparentNode(sibling)) { sibling = sibling.previousElementSibling; continue; }
+    if (isTransparentNode(sibling) || isTurnFoldHeader(sibling)) { sibling = sibling.previousElementSibling; continue; }
     if (sibling.getAttribute &&
         sibling.getAttribute('data-chat-flow-kind') === 'tool-call' &&
         isGroupableTool(sibling)) return sibling;
@@ -870,6 +921,7 @@ function startToolGroupObserver() {
 
 exports.startToolGroupObserver = startToolGroupObserver;
 exports.scanToolGroups = scanToolGroups;
+exports.resetToolGroups = resetToolGroups;
 exports.detectGroups = detectGroups;
 exports.isGroupableTool = isGroupableTool;
 exports.areConsecutive = areConsecutive;

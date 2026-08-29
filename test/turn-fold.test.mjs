@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import { loadBundleModule } from './load-module.mjs'
 const {
   planTurnFold, isProcessNode, formatDuration, terminalLabel,
+  isResumeMarkerNode,
   TERMINAL_LABELS,
 } = loadBundleModule('dsao/turn-fold')
 
@@ -194,6 +195,96 @@ assert.equal(TERMINAL_LABELS.completed, '已完成')
   const u = node('ry1', 'user', { kind: 'user' })
   const s = makeSession([{ num: 1, status: 'closed', startT: 0, endT: 1000, nodes: [u] }])
   assert.equal(planTurnFold(s).runs.length, 0)
+}
+
+// ── 12. 中断续跑归并：aborted + resumed ⇒ 单一折叠组 ────────────────────
+{
+  const u = node('m0', 'user', { kind: 'user' })
+  const partial = node('m1', 'assistant-step', { kind: 'assistant', finalNode: { seq: 41 }, blocks: [{ kind: 'text', text: '半截回复' }] })
+  const tool1 = node('m2', 'tool-call', { kind: 'tool' })
+  const tailA = node('m3', 'turn-tail', { kind: 'turn-tail', turn: 1, closing: { finalNode: { seq: 41 } } })
+  const marker = node('m4', 'user', { kind: 'user', source: { dsaoResume: true }, content: [] })
+  const tool2 = node('m5', 'tool-call', { kind: 'tool' })
+  const finalStep = node('m6', 'assistant-step', { kind: 'assistant', finalNode: { seq: 52 }, blocks: [{ kind: 'text', text: '最终回复' }] })
+  const tailB = node('m7', 'turn-tail', { kind: 'turn-tail', turn: 2, closing: { finalNode: { seq: 52 } } })
+  const s = makeSession([
+    { num: 1, status: 'closed', startT: 0, endT: 630000, reason: 'aborted', nodes: [u, partial, tool1, tailA] },
+    { num: 2, status: 'closed', startT: 700000, endT: 2045000, nodes: [marker, tool2, finalStep, tailB] },
+  ])
+  const plan = planTurnFold(s)
+  assert.equal(plan.folds.length, 1)
+  const f = plan.folds[0]
+  assert.equal(f.turn, 1)
+  // 链模型：非末段只留真实输入（m1 半截回复/m2 工具/m3 tail 全隐藏）；
+  // 末段 marker（m4）与过程（m5）隐藏，closing/tail 保留
+  assert.deepEqual(f.hiddenKeys, ['m1', 'm2', 'm3', 'm4', 'm5'])
+  assert.equal(f.anchorKey, 'm1')
+  assert.equal(f.closingKey, 'm6')
+  assert.equal(f.reasonKind, 'completed')
+  // 活跃时长求和：10分30秒 + 22分25秒 = 32分55秒（不含段间闲置 7 秒）
+  assert.equal(f.headerText, '已完成 · 32分55秒')
+  // 位置域归属改写到组 id
+  assert.equal(plan.turnOf.get('m5'), 1)
+  assert.equal(plan.turnOf.get('m6'), 1)
+}
+
+// ── 13. 归并负例：用户新起 prompt（无 marker）→ 不合并 ─────────────────
+{
+  const u1 = node('n0', 'user', { kind: 'user' })
+  const partial = node('n1', 'assistant-step', { kind: 'assistant', finalNode: { seq: 61 }, blocks: [{ kind: 'text', text: '半截回复' }] })
+  const tool1 = node('n2', 'tool-call', { kind: 'tool' })
+  const tailA = node('n3', 'turn-tail', { kind: 'turn-tail', turn: 1, closing: { finalNode: { seq: 61 } } })
+  const fresh = node('n4', 'user', { kind: 'user', content: [{ type: 'text', text: '换个问题' }] })
+  const tool2 = node('n5', 'tool-call', { kind: 'tool' })
+  const finalStep = node('n6', 'assistant-step', { kind: 'assistant', finalNode: { seq: 62 }, blocks: [{ kind: 'text', text: '回答' }] })
+  const tailB = node('n7', 'turn-tail', { kind: 'turn-tail', turn: 2, closing: { finalNode: { seq: 62 } } })
+  const s = makeSession([
+    { num: 1, status: 'closed', startT: 0, endT: 630000, reason: 'aborted', nodes: [u1, partial, tool1, tailA] },
+    { num: 2, status: 'closed', startT: 700000, endT: 2045000, nodes: [fresh, tool2, finalStep, tailB] },
+  ])
+  const plan = planTurnFold(s)
+  assert.equal(plan.folds.length, 2)
+  assert.deepEqual(plan.folds.map(f => f.turn), [1, 2])
+}
+
+// ── 14. isResumeMarkerNode 判定 ─────────────────────────────────────────
+assert.equal(isResumeMarkerNode(node('x', 'user', { kind: 'user', source: { dsaoResume: true }, content: [] })), true)
+assert.equal(isResumeMarkerNode(node('x', 'user', { kind: 'user', source: { dsaoResume: true }, content: [{ type: 'text', text: '  ' }] })), true)
+assert.equal(isResumeMarkerNode(node('x', 'user', { kind: 'user', source: { dsaoResume: true }, content: [{ type: 'text', text: '真实输入' }] })), false)
+assert.equal(isResumeMarkerNode(node('x', 'user', { kind: 'user', content: [] })), false)
+assert.equal(isResumeMarkerNode(node('x', 'assistant-step', { source: { dsaoResume: true }, content: [] })), false)
+assert.equal(isResumeMarkerNode(null), false)
+
+// ── 15. 链跨越无 fold 的纯报错段（上游 400 → 继续 → 手动停止，截图态）───
+{
+  const u = node('q0', 'user', { kind: 'user' })
+  const err1 = node('q1', 'turn-error', { kind: 'error' })
+  const tail1 = node('q2', 'turn-tail', { kind: 'turn-tail', turn: 1, closing: null })
+  const marker = node('q3', 'user', { kind: 'user', source: { dsaoResume: true }, content: [] })
+  const err2 = node('q4', 'turn-error', { kind: 'error' })
+  const tail2 = node('q5', 'turn-tail', { kind: 'turn-tail', turn: 2, closing: null })
+  const marker2 = node('q6', 'user', { kind: 'user', source: { dsaoResume: true }, content: [] })
+  const tool = node('q7', 'tool-call', { kind: 'tool' })
+  const finalStep = node('q8', 'assistant-step', { kind: 'assistant', finalNode: { seq: 91 }, blocks: [{ kind: 'text', text: 'final' }] })
+  const tail3 = node('q9', 'turn-tail', { kind: 'turn-tail', turn: 3, closing: { finalNode: { seq: 91 } } })
+  const s = makeSession([
+    { num: 1, status: 'closed', startT: 0, endT: 2000, reason: 'error', nodes: [u, err1, tail1] },
+    { num: 2, status: 'closed', startT: 3000, endT: 5000, reason: 'error', nodes: [marker, err2, tail2] },
+    { num: 3, status: 'closed', startT: 6000, endT: 66000, reason: 'aborted', nodes: [marker2, tool, finalStep, tail3] },
+  ])
+  const plan = planTurnFold(s)
+  assert.equal(plan.folds.length, 1)
+  const f = plan.folds[0]
+  assert.equal(f.turn, 1)
+  // 无 fold 的报错段（q1/q4 错误行、q2/q5 tail）与组内 marker（q3/q6）全部收进组
+  assert.deepEqual(f.hiddenKeys, ['q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'q7'])
+  assert.equal(f.anchorKey, 'q1')
+  assert.equal(f.closingKey, 'q8')
+  assert.equal(f.reasonKind, 'aborted')
+  // 活跃时长 2s + 2s + 60s
+  assert.equal(f.headerText, '已停止 · 1分04秒')
+  assert.equal(plan.turnOf.get('q7'), 1)
+  assert.equal(plan.turnOf.get('q4'), 1)
 }
 
 console.log('turn-fold: all assertions passed')

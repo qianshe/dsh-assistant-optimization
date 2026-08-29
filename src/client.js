@@ -73,6 +73,14 @@ function apply(ctx) {
     );
   });
 
+  // 2c. Turn folding toggle
+  slots.inject("settings.general.item", function () {
+    return slots.register(
+      { name: "settings.general.item", id: "turn-fold", order: 50 },
+      function () { return React.createElement(createTurnFoldSetting(React)); }
+    );
+  });
+
   // 3. Prompt enhance button. Registered in conversation.input.right, which
   //    renders BEFORE the model select and context meter — the component only
   //    drops a hidden anchor there and inserts its own DOM button just left of
@@ -95,13 +103,30 @@ function apply(ctx) {
 
   // 3c. 续跑行呈现：遮蔽 key:'user' 的官方渲染器，把续跑 marker 的空块
   //     用户消息渲染为「已从中断处继续」内联提示（项2 空白行 + 项4 连续性）。
+  //     ResumeMarkerAwareUserNode 由工厂创建（模块拿 React 走 DI，不直接导出组件），
+  //     必须经 createResumeContinuity 实例化——直接引用模块属性是 undefined，
+  //     会让 React 抛 #130（element type undefined，经槽位边界让位官方渲染器后
+  //     仅表现为控制台报错）。
   resumeContinuity.provideSlots(slots);
+  var resumeRC = resumeContinuity.createResumeContinuity(React);
   slots.inject("conversation.chat.node", function () {
     return slots.register(
       { name: "conversation.chat.node", key: "user", priority: -1, locale: "conversation" },
       function (rawProps) {
-        return React.createElement(resumeContinuity.ResumeMarkerAwareUserNode, rawProps);
+        return React.createElement(resumeRC.ResumeMarkerAwareUserNode, rawProps);
       }
+    );
+  });
+
+  // 3d. 回合过程折叠：隐藏锚点挂在输入行，同步器观察聊天列 DOM +
+  //     会话快照，把已完成 turn 的过程收起为「已完成 · 时长」一行。
+  //     会话切换收敛需要拆掉两个模块的注入头再重建（注入头是 React 不管理
+  //     的外来节点，跨会话原地泄漏），因此把 tool-group 的复位/重建函数
+  //     经 DI 传入——缺省参数下行为退化为纯 tf 同步（测试环境用）。
+  slots.inject("conversation.input.right", function () {
+    return slots.register(
+      { name: "conversation.input.right", id: "dsao-turn-fold", order: 110, locale: "conversation" },
+      createTurnFold(React, resetToolGroups, scanToolGroups).TurnFoldMount
     );
   });
 

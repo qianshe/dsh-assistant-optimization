@@ -111,6 +111,7 @@ node test/resume-continuity.test.mjs
 node test/turn-fold.test.mjs
 node test/fast-context-gate.test.mjs
 node test/content-embed.test.mjs
+node scripts/repro-switch-back.cjs
 node --check lib/client.js
 ```
 
