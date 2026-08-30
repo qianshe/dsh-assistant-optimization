@@ -207,8 +207,8 @@ function mergeResumeFolds(plan, nodes, locations, turnMeta) {
       reasonKind: eMeta.reasonKind,
       label: label,
       runMs: totalMs,
-      headerText: label + (totalMs !== null ? " · " + formatDuration(totalMs) : "") +
-        (chainSteering > 0 ? " · " + chainSteering + " 条插话" : "")
+      steeringCount: chainSteering,
+      headerText: label + (totalMs !== null ? " · " + formatDuration(totalMs) : "")
     });
     // 位置域归属整链改写到组 id（tg 头隐藏依赖它）
     for (g = 0; g < chain.length; g++) {
@@ -325,8 +325,8 @@ function planTurnFold(session) {
       reasonKind: reasonKind,
       label: label,
       runMs: runMs,
-      headerText: label + (runMs !== null ? " · " + formatDuration(runMs) : "") +
-        (steeringCount > 0 ? " · " + steeringCount + " 条插话" : "")
+      steeringCount: steeringCount,
+      headerText: label + (runMs !== null ? " · " + formatDuration(runMs) : "")
     });
   });
   mergeResumeFolds(plan, nodes, locations, turnMeta);
@@ -349,6 +349,8 @@ var CSS = [
   ".dsao-tf-headerIcon[data-state=error]{color:var(--dsw-alias-state-error-primary)}",
   ".dsao-tf-headerText{font-weight:400;white-space:nowrap;min-width:0}",
   ".dsao-tf-headerSpacer{flex:auto}",
+  ".dsao-tf-steerCount{flex:none;color:var(--dsw-alias-label-tertiary);font-size:14px;line-height:24px;margin-right:8px;white-space:nowrap}",
+  '[data-dsao-tf-steer="0"]{display:none!important}',
   ".dsao-tf-toggle{flex:none;display:inline-flex;align-items:center;gap:4px;color:var(--dsw-alias-label-secondary);font-size:14px;line-height:24px}",
   ".dsao-tf-chevron{display:inline-flex;transition:transform 180ms ease;color:var(--dsw-alias-label-secondary)}",
   '.dsao-tf-header[data-dsao-tf-state="expanded"] .dsao-tf-chevron{transform:rotate(90deg)}',
@@ -402,6 +404,13 @@ function createHeader(fold, doc) {
   var spacer = doc.createElement("span");
   spacer.className = "dsao-tf-headerSpacer";
 
+  // 插话计数：右置独立元素（折叠时显示「N 条插话」），与头文案解耦，
+  // updateHeader 随 steeringCount 同步刷新；0 时经 CSS 隐藏。
+  var steer = doc.createElement("span");
+  steer.className = "dsao-tf-steerCount";
+  steer.setAttribute("data-dsao-tf-steer", String(fold.steeringCount || 0));
+  steer.textContent = (fold.steeringCount || 0) > 0 ? fold.steeringCount + " 条插话" : "";
+
   var toggle = doc.createElement("span");
   toggle.className = "dsao-tf-toggle";
   var chevron = doc.createElement("span");
@@ -412,6 +421,7 @@ function createHeader(fold, doc) {
   header.appendChild(icon);
   header.appendChild(text);
   header.appendChild(spacer);
+  header.appendChild(steer);
   header.appendChild(toggle);
   return header;
 }
@@ -421,7 +431,15 @@ function updateHeader(header, fold, expanded) {
   header.setAttribute("aria-expanded", expanded ? "true" : "false");
   var text = header.querySelector(".dsao-tf-headerText");
   if (text && text.textContent !== fold.headerText) text.textContent = fold.headerText;
-  header.setAttribute("aria-label", fold.headerText);
+  // 插话计数右置元素：随 steeringCount 同步（0 → CSS 隐藏）
+  var steer = header.querySelector(".dsao-tf-steerCount");
+  if (steer) {
+    var n = fold.steeringCount || 0;
+    steer.setAttribute("data-dsao-tf-steer", String(n));
+    steer.textContent = n > 0 ? n + " 条插话" : "";
+  }
+  header.setAttribute("aria-label", fold.headerText +
+    ((fold.steeringCount || 0) > 0 ? " · " + fold.steeringCount + " 条插话" : ""));
   // 状态图标随 reasonKind 同步刷新：折叠头可能在早期状态创建（如中间段
   // 单独成组时是「已出错」红点），链归并后状态取末段（已完成），文案换而
   // 图标滞留会出现「红点 + 已完成」错位。

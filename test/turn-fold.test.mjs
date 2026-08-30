@@ -301,7 +301,8 @@ assert.equal(isResumeMarkerNode(null), false)
   const f = plan.folds[0]
   assert.deepEqual(f.hiddenKeys, ['w1', 'w2', 'w3'])
   assert.equal(f.anchorKey, 'w1')
-  assert.equal(f.headerText, '已完成 · 1分00秒 · 1 条插话')
+  assert.equal(f.steeringCount, 1)
+  assert.equal(f.headerText, '已完成 · 1分00秒')
 }
 // 插话先于一切过程节点 → 锚点取插话，且仅凭插话也可成组
 {
@@ -313,7 +314,8 @@ assert.equal(isResumeMarkerNode(null), false)
   const f = planTurnFold(s).folds[0]
   assert.deepEqual(f.hiddenKeys, ['x1'])
   assert.equal(f.anchorKey, 'x1')
-  assert.equal(f.headerText, '已完成 · 5秒 · 1 条插话')
+  assert.equal(f.steeringCount, 1)
+  assert.equal(f.headerText, '已完成 · 5秒')
 }
 
 // ── 17. 链归并末段的插话同样收起并计入 ─────────────────────────────────
@@ -334,7 +336,8 @@ assert.equal(isResumeMarkerNode(null), false)
   const f = plan.folds[0]
   assert.deepEqual(f.hiddenKeys, ['y1', 'y2', 'y3', 'y4'])
   assert.equal(f.closingKey, 'y5')
-  assert.equal(f.headerText, '已完成 · 1分05秒 · 1 条插话')
+  assert.equal(f.steeringCount, 1)
+  assert.equal(f.headerText, '已完成 · 1分05秒')
 }
 
 console.log('turn-fold: all assertions passed')

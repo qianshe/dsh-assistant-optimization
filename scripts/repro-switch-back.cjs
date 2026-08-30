@@ -524,19 +524,23 @@ console.log('── 场景 11：运行中插话随折叠收起 ──');
   const stKey = sessionST.chat.locations.getTurn(0)[3];
   const inHidden = planST.folds.length === 1 && planST.folds[0].hiddenKeys.indexOf(stKey) >= 0;
   const headerST = planST.folds.length ? planST.folds[0].headerText : '';
-  console.log(`  计划：插话入隐藏集=${inHidden}，头="${headerST}"`);
+  console.log(`  计划：插话入隐藏集=${inHidden}，头="${headerST}"，steeringCount=${planST.folds[0] ? planST.folds[0].steeringCount : '—'}`);
   tf.applyPlanToColumn(column, planST, {});
   const stEl = column.querySelector(`[data-chat-flow-key="${stKey}"]`);
   const collapsedHidden = stEl && stEl.hasAttribute('data-dsao-tf-hidden');
+  // 右置计数元素：存在、可见、文案正确（折叠头右侧、chevron 之前）
+  const chip = column.querySelector('.dsao-tf-steerCount');
+  const chipOk = chip && chip.getAttribute('data-dsao-tf-steer') === '1' &&
+    chip.textContent === '1 条插话';
   tf.applyPlanToColumn(column, planST, { 0: true });
   const expandedVisible = stEl && !stEl.hasAttribute('data-dsao-tf-hidden');
   tf.applyPlanToColumn(column, planST, {});
   const recollapsed = stEl && stEl.hasAttribute('data-dsao-tf-hidden');
-  if (!inHidden || headerST.indexOf('1 条插话') < 0 || !collapsedHidden || !expandedVisible || !recollapsed) {
+  if (!inHidden || !chipOk || !collapsedHidden || !expandedVisible || !recollapsed) {
     failures++;
-    console.log(`✗ [场景 11] 插话折叠行为异常（隐藏集=${inHidden} 折叠=${collapsedHidden} 展开=${expandedVisible} 再收起=${recollapsed}）`);
+    console.log(`✗ [场景 11] 插话折叠行为异常（隐藏集=${inHidden} 右置计数=${chipOk} 折叠=${collapsedHidden} 展开=${expandedVisible} 再收起=${recollapsed}）`);
   } else {
-    console.log('✓ [场景 11] 插话折叠收起、展开恢复、头含计数');
+    console.log('✓ [场景 11] 插话折叠收起、展开恢复、右侧计数「1 条插话」');
   }
 }
 
