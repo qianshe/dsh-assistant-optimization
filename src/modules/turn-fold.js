@@ -335,26 +335,30 @@ function planTurnFold(session) {
 
 // ── DOM 层 ────────────────────────────────────────────────────────────────
 
+// ── 折叠头样式：对齐官方 TurnProcessNodeView（l_V-RG）规格 ──
+// 官方：border-bottom .5px l2 / height 33px / padding 0 0 8px / 折叠态 margin-bottom 8px /
+// chevron 左置 16px tertiary（展开 rotate(0)、折叠 rotate(-90deg)，0.1s）/ 文字 14px/24px ellipsis /
+// prefers-reduced-motion。增强：状态图标、运行时长、插话计数。
 var CSS = [
   "[data-dsao-tf-hidden]{display:none!important}",
   "[data-dsao-tf-closing-folded] [data-variant=\"think\"]{display:none!important}",
   "[data-dsao-tf-process-end]{border-bottom:1px solid var(--dsw-alias-border-l2)}",
   "@keyframes dsao-tf-pulse{0%,100%{opacity:.35}50%{opacity:1}}",
-  ".dsao-tf-running{display:flex;align-items:center;gap:0;padding:0;cursor:default;user-select:none;font-size:14px;line-height:24px;color:var(--dsw-alias-label-secondary);background:transparent;min-width:0;border-bottom:1px solid var(--dsw-alias-border-l2)}",
+  ".dsao-tf-running{display:flex;align-items:center;box-sizing:border-box;border:none;border-bottom:.5px solid var(--dsw-alias-border-l2);width:100%;min-width:0;height:33px;color:var(--dsw-alias-label-secondary);cursor:default;text-align:left;background:0 0;padding:0 0 8px}",
   ".dsao-tf-runningIcon{width:16px;height:16px;flex:none;display:inline-flex;align-items:center;justify-content:center;color:var(--dsw-alias-brand-primary);margin-right:6px}",
   ".dsao-tf-runningDot{width:8px;height:8px;border-radius:50%;background:currentColor;animation:dsao-tf-pulse 1.2s ease-in-out infinite}",
-  ".dsao-tf-runningText{font-weight:400;white-space:nowrap;min-width:0}",
-  ".dsao-tf-header{display:flex;align-items:center;gap:0;padding:0;cursor:pointer;user-select:none;font-size:14px;line-height:24px;color:var(--dsw-alias-label-secondary);background:transparent;border:none;border-bottom:1px solid var(--dsw-alias-border-l2);border-radius:0;min-width:0;transition:color 120ms}",
+  ".dsao-tf-runningText{font-weight:400;white-space:nowrap;min-width:0;font-size:14px;line-height:24px}",
+  ".dsao-tf-header{box-sizing:border-box;border:none;border-bottom:.5px solid var(--dsw-alias-border-l2);width:100%;min-width:0;height:33px;color:var(--dsw-alias-label-secondary);cursor:pointer;text-align:left;background:0 0;align-items:center;padding:0 0 8px;display:flex}",
+  ".dsao-tf-header:not([data-dsao-tf-state=\"expanded\"]){margin-bottom:8px}",
+  ".dsao-tf-chevron{width:16px;height:16px;color:var(--dsw-alias-label-tertiary);flex:none;margin-right:6px;transition:transform .1s;transform:rotate(-90deg);display:inline-flex}",
+  ".dsao-tf-header[data-dsao-tf-state=\"expanded\"] .dsao-tf-chevron{transform:rotate(0)}",
   ".dsao-tf-headerIcon{width:16px;height:16px;flex:none;display:inline-flex;align-items:center;justify-content:center;color:var(--dsw-alias-label-tertiary);margin-right:6px}",
   ".dsao-tf-headerIcon[data-state=error]{color:var(--dsw-alias-state-error-primary)}",
-  ".dsao-tf-headerText{font-weight:400;white-space:nowrap;min-width:0}",
+  ".dsao-tf-headerText{font-weight:400;text-overflow:ellipsis;white-space:nowrap;min-width:0;font-size:14px;line-height:24px;overflow:hidden}",
   ".dsao-tf-headerSpacer{flex:auto}",
-  ".dsao-tf-steerCount{flex:none;color:var(--dsw-alias-label-tertiary);font-size:14px;line-height:24px;margin-right:8px;white-space:nowrap}",
+  ".dsao-tf-steerCount{flex:none;color:var(--dsw-alias-label-tertiary);font-size:14px;line-height:24px;margin-right:0;white-space:nowrap}",
   '[data-dsao-tf-steer="0"]{display:none!important}',
-  ".dsao-tf-toggle{flex:none;display:inline-flex;align-items:center;gap:4px;color:var(--dsw-alias-label-secondary);font-size:14px;line-height:24px}",
-  ".dsao-tf-chevron{display:inline-flex;transition:transform 180ms ease;color:var(--dsw-alias-label-secondary)}",
-  '.dsao-tf-header[data-dsao-tf-state="expanded"] .dsao-tf-chevron{transform:rotate(90deg)}',
-  ".dsao-tf-header:hover .dsao-tf-headerText{color:var(--dsw-alias-label-primary)}",
+  "@media (prefers-reduced-motion:reduce){.dsao-tf-chevron{transition:none}}",
 ].join("");
 
 function ensureStyles(doc) {
@@ -380,6 +384,8 @@ function iconForReason(reasonKind) {
   return ICON_CHECK;
 }
 
+// 结构对齐官方 TurnProcessNodeView：chevron 最左、label 随后；增强项（状态图标、插话计数）
+// 按官方 16px+6px 间距节奏内插。
 function createHeader(fold, doc) {
   var header = doc.createElement("div");
   header.className = "dsao-tf-header";
@@ -390,8 +396,13 @@ function createHeader(fold, doc) {
   header.setAttribute("tabindex", "0");
   header.setAttribute("aria-expanded", "false");
   header.setAttribute("aria-label", fold.headerText);
-  header.style.borderBottom = "1px solid var(--dsw-alias-border-l2, rgba(255,255,255,0.1))";
 
+  // chevron（官方位：最左，16px tertiary）
+  var chevron = doc.createElement("span");
+  chevron.className = "dsao-tf-chevron";
+  chevron.innerHTML = CHEVRON_SVG;
+
+  // 状态图标（增强）：完成✓/停止■/出错●
   var icon = doc.createElement("span");
   icon.className = "dsao-tf-headerIcon";
   icon.setAttribute("data-state", fold.reasonKind === "error" ? "error" : "ok");
@@ -404,25 +415,17 @@ function createHeader(fold, doc) {
   var spacer = doc.createElement("span");
   spacer.className = "dsao-tf-headerSpacer";
 
-  // 插话计数：右置独立元素（折叠时显示「N 条插话」），与头文案解耦，
-  // updateHeader 随 steeringCount 同步刷新；0 时经 CSS 隐藏。
+  // 插话计数（增强）：右置独立元素；0 时经 CSS 隐藏。
   var steer = doc.createElement("span");
   steer.className = "dsao-tf-steerCount";
   steer.setAttribute("data-dsao-tf-steer", String(fold.steeringCount || 0));
   steer.textContent = (fold.steeringCount || 0) > 0 ? fold.steeringCount + " 条插话" : "";
 
-  var toggle = doc.createElement("span");
-  toggle.className = "dsao-tf-toggle";
-  var chevron = doc.createElement("span");
-  chevron.className = "dsao-tf-chevron";
-  chevron.innerHTML = CHEVRON_SVG;
-  toggle.appendChild(chevron);
-
+  header.appendChild(chevron);
   header.appendChild(icon);
   header.appendChild(text);
   header.appendChild(spacer);
   header.appendChild(steer);
-  header.appendChild(toggle);
   return header;
 }
 
