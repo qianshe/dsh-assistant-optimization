@@ -23,9 +23,17 @@
 //
 // See lib/client.js for the assembled static version.
 
+// Required services, declared so Cordis holds this fiber in waiting until the
+// slots service is actually provided. Row order does NOT make a service
+// available: in dsh 0.1.2+ the shell boots all client plugin entries
+// concurrently (Promise.all over the boot manifest), so an undeclared probe
+// like ctx.get("slots") races the renderer and silently bails out. This is
+// the client-side twin of the host half's `inject = ['webServer']` fix.
+const inject = ['slots'];
+
 // The apply function below is what gets registered as the Cordis plugin:
 function apply(ctx) {
-  var slots = ctx.get("slots");
+  var slots = ctx.slots;
   if (slots === undefined) return;
 
   // 1. Wrap official assistant-step renderer (priority -1 shadows priority 0)
