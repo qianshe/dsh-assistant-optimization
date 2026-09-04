@@ -184,6 +184,11 @@ class StubElement {
     emitAttr(this, name, old)
   }
 
+  // Native DOM: hasAttribute (used by tool-group official-fold sync).
+  hasAttribute(name) {
+    return name in this.attrs
+  }
+
   /** Detach from the current parent, the way live DOM insertion relocates a node. */
   detach() {
     if (this.parent !== null) this.parent.removeChild(this)
@@ -289,11 +294,14 @@ class StubElement {
    * of the shapes the shipped bundle queries.
    */
   querySelector(selector) {
-    return this.descendants().find((el) => matchesSelector(el, selector)) ?? null
+    // Comma groups: "[a],[b]" — native semantics (any branch matches).
+    const parts = selector.split(",").map((p) => p.trim()).filter(Boolean)
+    return this.descendants().find((el) => parts.some((p) => matchesSelector(el, p))) ?? null
   }
 
   querySelectorAll(selector) {
-    return this.descendants().filter((el) => matchesSelector(el, selector))
+    const parts = selector.split(",").map((p) => p.trim()).filter(Boolean)
+    return this.descendants().filter((el) => parts.some((p) => matchesSelector(el, p)))
   }
 }
 

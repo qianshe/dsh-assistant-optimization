@@ -43,6 +43,10 @@ var GROUPABLE_TOOLS = {
 };
 
 // Prefix match for tool families with dynamic suffixes.
+// 会话切换判定阈值：React 换会话时整列 keyed flowItem 批替换。正常操作
+// （单行更新、分页加载更多）最多移除 1-2 行，远低于此值。
+var CONVERGE_REMOVAL_THRESHOLD = 8;
+
 var GROUPABLE_PREFIXES = [
   'mcp__',   // MCP tools: mcp__mcp_router__tavily_search, etc.
   'ssh_'     // SSH tools: ssh_exec, ssh_upload, ssh_tunnel, etc.
@@ -693,7 +697,7 @@ function resetToolGroups() {
 // switches) do a full scan. This is the "compute once on open, then manage
 // only the latest group in real time" model, with a full-scan fallback for
 // anything that is not a pure single-node tail append.
-var scanStats = { full: 0, tail: 0, attr: 0, ignored: 0 };
+var scanStats = { full: 0, tail: 0, attr: 0, ignored: 0, converged: 0 };
 var lastLatest = null; // latest group (node array) after the last scan
 // Mutation batches that arrive inside one debounce window are merged here
 // (a later batch must not replace an earlier tail add): full wins over tail,
@@ -744,6 +748,56 @@ function fullPipeline(root) {
   // Auto-manage expand/collapse for the latest group only
   manageLatestGroup(groups);
   lastLatest = groups.length ? groups[groups.length - 1] : null;
+  // 官方 turn 折叠同步：dsh 0.1.2+ 原生折叠对 process member 设
+  // hidden="until-found"（React 管理），但我们的组头是列的外来节点，
+  // 官方不折叠它 —— 折叠后组头会漂在 turn 折叠区外。这里让组头跟随
+  // 同组首个官方成员的 hidden 状态（折叠随官方走）。
+  syncHeadersToTurnFolds(groups);
+}
+
+// ── 官方 turn 折叠同步 ─────────────────────────────────────────────────────
+// 对每个组：读第一个成员（官方 flowItem）的 hidden 属性；有 hidden 就给
+// 组头也设 hidden（DOM 隐藏），没有就移除。幂等：直接对齐，不做 diff。
+// 展开时官方移除 hidden，下次扫描（attr mutation 触发）自动恢复组头。
+function syncHeadersToTurnFolds(groups) {
+  if (!groups) {
+    var all = document.querySelectorAll('[data-dsao-tg-header]');
+    for (var i = 0; i < all.length; i++) syncOneHeader(all[i]);
+    return;
+  }
+  for (var j = 0; j < groups.length; j++) {
+    var header = headerOfGroup(groups[j]);
+    if (header) syncOneHeader(header);
+  }
+}
+
+// 组头元素：applyGroup 时把头插在组首项之前，data-dsao-tg-pos 属性标记
+// 在组首项上。从组首项向前找头（跳过外来节点）。
+function headerOfGroup(group) {
+  if (!group || !group.length) return null;
+  var el = group[0];
+  var sibling = el.previousElementSibling;
+  while (sibling) {
+    if (sibling.getAttribute && sibling.getAttribute('data-dsao-tg-header') !== null) return sibling;
+    if (isTransparentNode(sibling)) { sibling = sibling.previousElementSibling; continue; }
+    return null;
+  }
+  return null;
+}
+
+function syncOneHeader(header) {
+  if (!header || !header.parentNode) return;
+  // 找组头的第一个组员（头后面的第一个 tool-call flowItem）
+  var member = header.nextElementSibling;
+  while (member) {
+    if (member.getAttribute && member.getAttribute('data-chat-flow-kind') === 'tool-call') break;
+    if (isTransparentNode(member)) { member = member.nextElementSibling; continue; }
+    break;
+  }
+  if (!member) return;
+  var folded = member.hasAttribute('hidden');
+  if (folded) header.setAttribute('hidden', 'until-found');
+  else header.removeAttribute('hidden');
 }
 
 // Public full scan (initial load / manual / hysteresis confirm). Backward-
@@ -784,6 +838,9 @@ function performTailScan(item) {
 // re-evaluate the latest group's expand/collapse (O(latest group)).
 function performAttrScan() {
   if (lastLatest && lastLatest.length) manageLatestGroup([lastLatest]);
+  // 官方折叠的 hidden 翻转可发生在任意 turn（点开旧折叠头），
+  // 每次属性扫描都同步全部组头的 hidden 跟随状态。
+  syncHeadersToTurnFolds(null);
   scanStats.attr++;
 }
 
@@ -795,6 +852,7 @@ function classifyMutations(mutations) {
   var hasRemoval = false;
   var addedFlow = [];
   var attrState = false;
+  var removedFlowCount = 0;
 
   function isHeader(node) {
     return !!(node && node.nodeType === 1 && node.getAttribute &&
@@ -828,7 +886,7 @@ function classifyMutations(mutations) {
   for (var i = 0; i < mutations.length; i++) {
     var m = mutations[i];
     if (m.type === 'attributes') {
-      if (m.attributeName === 'data-state') attrState = true;
+      if (m.attributeName === "data-state" || m.attributeName === "hidden") attrState = true;
       continue;
     }
     var removed = m.removedNodes;
@@ -837,7 +895,7 @@ function classifyMutations(mutations) {
         var rn = removed[k];
         if (rn.nodeType !== 1) continue;
         if (isHeader(rn)) continue; // our own cleanup — ignore
-        if (hasRelevantKind(rn)) hasRemoval = true;
+        if (hasRelevantKind(rn)) { hasRemoval = true; removedFlowCount++; }
       }
     }
     var added = m.addedNodes;
@@ -857,6 +915,11 @@ function classifyMutations(mutations) {
   }
   addedFlow = uniq;
 
+  // 会话切换判定：一批移除里 flowItem 数 >= CONVERGE_REMOVAL_THRESHOLD，
+  // 说明 React 把整列 keyed 子元素换掉了（不是常规的单行更新）。
+  // 此时旧注入头（React 不管理的外来节点）会原地留存并漂进新会话的列，
+  // 必须走 converge（拆全部注入 + 重建）而不是普通 full scan。
+  if (removedFlowCount >= CONVERGE_REMOVAL_THRESHOLD) return { mode: 'converge' };
   if (hasRemoval) return { mode: 'full' };
   if (addedFlow.length === 0) return { mode: attrState ? 'attr' : 'ignore' };
   if (addedFlow.length > 1) return { mode: 'full' };
@@ -879,6 +942,16 @@ function startToolGroupObserver() {
   var onMutations = function (mutations) {
     var c = classifyMutations(mutations);
     if (c.mode === 'ignore') { scanStats.ignored++; return; }
+    // 会话切换：先拆掉全部注入（含上一会话残留的头），再全量重建。
+    // 拆与建同帧完成（不防抖），避免新会话旧头闪现。
+    if (c.mode === 'converge') {
+      resetToolGroups();
+      performFullScan();
+      scanStats.converged++;
+      if (scanTimer) { clearTimeout(scanTimer); scanTimer = null; }
+      pending = null;
+      return;
+    }
     if (!pending) pending = { full: false, item: null };
     if (c.mode === 'full') {
       pending.full = true;
@@ -888,7 +961,8 @@ function startToolGroupObserver() {
       else pending.item = c.item;
     }
     // c.mode === 'attr': nothing to accumulate; the scan that runs
-    // re-evaluates the latest group's state.
+    // re-evaluates the latest group's state (含官方折叠 hidden 翻转时的
+    // 组头同步 —— attr 扫描会重新执行 syncHeadersToTurnFolds)。
     if (scanTimer) clearTimeout(scanTimer);
     scanTimer = setTimeout(function () {
       scanTimer = null;
@@ -909,7 +983,9 @@ function startToolGroupObserver() {
     childList: true,
     subtree: true,
     attributes: true,
-    attributeFilter: ['data-state']
+    // hidden：dsh 0.1.2+ 官方 turn 折叠对 process member 设/移除
+    // hidden="until-found"，组头需要跟随同步（见 syncHeadersToTurnFolds）。
+    attributeFilter: ['data-state', 'hidden']
   });
   return function () {
     if (scanTimer) { clearTimeout(scanTimer); scanTimer = null; }

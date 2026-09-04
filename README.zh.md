@@ -106,6 +106,7 @@ node test/resume-route.test.mjs
 node test/resume-continuity.test.mjs
 node test/fast-context-gate.test.mjs
 node test/content-embed.test.mjs
+node test/turn-fold-sync.test.mjs
 node --check lib/client.js
 ```
 
