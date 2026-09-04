@@ -29,12 +29,27 @@
 // concurrently (Promise.all over the boot manifest), so an undeclared probe
 // like ctx.get("slots") races the renderer and silently bails out. This is
 // the client-side twin of the host half's `inject = ['webServer']` fix.
-const inject = ['slots'];
+// settingsScope：接管官方 transcriptView（dsh 0.1.2+ 默认 compact 折叠）
+const inject = ['slots', 'settingsScope'];
 
 // The apply function below is what gets registered as the Cordis plugin:
 function apply(ctx) {
   var slots = ctx.slots;
   if (slots === undefined) return;
+
+  // ── 屏蔽官方 turn 折叠（dsh 0.1.2+）───────────────────────────
+  // 官方在 transcriptView==="compact" 时折叠过程成员（hidden="until-found"），
+  // 与我们的 turn-fold 双重折叠。我们启用时把官方强制为 normal。
+  function syncOfficialTranscriptView() {
+    try {
+      var enabled = turnFold.loadEnabled();
+      var scope = ctx.settingsScope && ctx.settingsScope.bind ? ctx.settingsScope.bind({ namespace: "ui-chat" }) : null;
+      if (!scope) return;
+      scope.set("transcriptView", enabled ? "normal" : "compact");
+    } catch (e) { /* host 设置不可写时静默退回纯 DOM 折叠 */ }
+  }
+  syncOfficialTranscriptView();
+  window.addEventListener("dsao:turn-fold-changed", syncOfficialTranscriptView);
 
   // 1. Wrap official assistant-step renderer (priority -1 shadows priority 0)
   slots.inject("conversation.chat.node", function () {
@@ -81,6 +96,14 @@ function apply(ctx) {
     );
   });
 
+  // 2c. Turn folding toggle
+  slots.inject("settings.general.item", function () {
+    return slots.register(
+      { name: "settings.general.item", id: "turn-fold", order: 50 },
+      function () { return React.createElement(createTurnFoldSetting(React)); }
+    );
+  });
+
   // 3. Prompt enhance button. Registered in conversation.input.right, which
   //    renders BEFORE the model select and context meter — the component only
   //    drops a hidden anchor there and inserts its own DOM button just left of
@@ -118,6 +141,17 @@ function apply(ctx) {
     );
   });
 
+  // 3d. 回合过程折叠：隐藏锚点挂在输入行，同步器观察聊天列 DOM +
+  //     会话快照，把已完成 turn 的过程收起为「已完成 · 时长」一行。
+  //     会话切换收敛需要拆掉两个模块的注入头再重建（注入头是 React 不管理
+  //     的外来节点，跨会话原地泄漏），因此把 tool-group 的复位/重建函数
+  //     经 DI 传入——缺省参数下行为退化为纯 tf 同步（测试环境用）。
+  slots.inject("conversation.input.right", function () {
+    return slots.register(
+      { name: "conversation.input.right", id: "dsao-turn-fold", order: 110, locale: "conversation" },
+      createTurnFold(React, resetToolGroups, scanToolGroups).TurnFoldMount
+    );
+  });
 
   // 4. Mermaid post-processor
   ctx.effect(function () { return startMermaidObserver(); });
@@ -128,4 +162,11 @@ function apply(ctx) {
   // 6. 断点续发行折叠：DOM 层后备，把官方渲染的空 marker 气泡替换为
   //    「已从中断处继续」提示行（slot 遮蔽未生效时的双保险）。
   ctx.effect(function () { return resumeContinuity.startResumeHintObserver(); });
+
+  // 卸载时移除官方折叠同步监听
+  ctx.effect(function () {
+    return function () {
+      window.removeEventListener("dsao:turn-fold-changed", syncOfficialTranscriptView);
+    };
+  });
 }

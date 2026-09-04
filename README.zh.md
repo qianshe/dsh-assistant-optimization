@@ -15,6 +15,7 @@
 | ✎ | **编辑 Diff 数值** | 在折叠态 Write、Edit 行上显示 `+10/-2`，无需展开 |
 | ✨ | **Prompt 增强** | 一键把粗糙草稿改写成更清晰的指令 |
 | ▶ | **断点续发** | 手动中断或会话出错后，发送键变为播放键——悬停显示提示，单击从断点续跑，使用当前选中的模型。输入文字或开始新一轮对话会立即恢复正常发送键。 |
+| 📁 | **回合过程折叠** | 回合结束后，过程内容（思考、工具调用、中间正文）自动收起为一行「已完成 · 时长」，总结回复保持展开；运行中不折叠 |
 | 🛰️ | **语义搜索** | `context_search`：用模糊描述定位代码（Windsurf 驱动） |
 
 ### 推理折叠
@@ -54,9 +55,13 @@ Write、Edit 行在文件路径后带上 `+N`（新增） / `-N`（删除）徽�
 - **空标记行**：续跑标记进入对话流时，插件将空白气泡 + 复制按钮替换为一条低调的「已从中断处继续」提示。
 - **实现方式**：CSS 叠加——通过 `data-dsao-resume` 属性隐藏官方按钮 SVG 并注入播放 SVG，不干扰 React 重渲染周期。
 
-### 回合过程折叠（已移除）
+### 回合过程折叠
 
-DSH 0.1.2+ 已原生内置回合过程折叠（`dsh-client-ui-chat`，默认开启，**设置 → 对话显示 → Compact**），插件为避免双重折叠将 turn-fold 模块退役。内置折叠头只显示消息/子代理计数，不显示时长与插话计数；若需要这些可要求恢复模块作为原生 Normal 模式的补充。
+**覆盖官方折叠。** dsh 0.1.2+ 自带回合过程折叠（设置 → 对话显示 → Compact）。本插件现在会接管该设置：这里开启回合折叠时，官方模式被强制为 Normal，只有插件自己的折叠（时长 + 插话计数、断点链合并）生效；这里关闭则交还给官方 Compact。两边任意切换都会重新对齐。
+
+回合运行中不做任何改动——原生的 "Deep diving…" 状态行 + 计时就是"运行中"显示。回合结束（结论落定）的瞬间，该回合的过程内容——思考行、工具调用、中间正文——自动收起为一行折叠头：**已完成 · 时长**（出错/停止的回合显示已出错/已停止）。运行中插入的插话（steering）随组收起，折叠头会显示「· N 条插话」。保持可见的：你的提问、总结性回复、以及它的操作行（复制等）。点折叠头可展开看全过程，再点收起。展开/收起选择只保存在内存里，刷新页面后默认收起。
+
+折叠计划完全由会话快照计算：轮次分组走 `chat.locations`，完成判定走 `turn/end` 原因，总结性回复由官方 `turn-tail` 节点的 `closing` 指针定位，时长取自轮次起止时间戳（与原生计时同一数字）。在 **设置 → 通用 → Turn Folding** 里开关。
 
 ### 语义搜索（`context_search`）
 
@@ -86,6 +91,7 @@ dsh web
 | 设置项 | 默认值 | 说明 |
 |---|---|---|
 | Thinking Tag Markers | `["</thinking>"]` | 分割推理与正文的标记。支持多个。在 **设置 → 通用** 编辑。 |
+| Turn Folding | 开 | 已完成回合的过程自动收起为一行「已完成 · 时长」。在 **设置 → 通用** 编辑。 |
 | Windsurf API Key | — | `context_search` 的凭据。解析顺序见上。无 key 时该工具不注册。 |
 
 ## 要求
@@ -104,9 +110,11 @@ node test/host-prompt-enhance.test.mjs
 node test/resume-gate.test.mjs
 node test/resume-route.test.mjs
 node test/resume-continuity.test.mjs
+node test/turn-fold.test.mjs
 node test/fast-context-gate.test.mjs
 node test/content-embed.test.mjs
 node test/turn-fold-sync.test.mjs
+node scripts/repro-switch-back.cjs
 node --check lib/client.js
 ```
 
