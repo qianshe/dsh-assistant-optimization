@@ -15,7 +15,6 @@ Six capabilities, all plug-and-play. Official rendering is never replaced — th
 | ✎ | **Edit diff counts** | Shows `+10/-2` on collapsed Write & Edit rows, no expand needed |
 | ✨ | **Prompt enhance** | Rewrites a rough draft into a clearer instruction in one click |
 | ▶ | **Resume-from-breakpoint** | After a manual stop or session error, the send button becomes a play key — hover shows a tooltip, one click resumes from the interruption with the currently selected model. Typing or starting a new turn instantly restores the normal send button. |
-| 📁 | **Turn folding** | When a turn finishes, its process (thinking, tool calls, intermediate text) auto-collapses into one "已完成 · 时长" header; the final summary reply stays expanded. Nothing collapses while a turn runs. |
 | 🛰️ | **Semantic search** | `context_search` — locate code from a vague description (Windsurf-backed) |
 
 ### Reasoning fold
@@ -55,11 +54,9 @@ When a conversation stops abnormally — the user clicks **Stop** or the session
 - **Empty marker rows**: when the resume marker enters the transcript, the plugin replaces the blank bubble + copy button with a subtle "已从中断处继续" hint line.
 - **Implementation**: CSS-overlay approach — the official button's SVG is hidden via `data-dsao-resume` attribute + a play SVG sibling, so React's re-render cycle is never disrupted.
 
-### Turn folding
+### Turn folding (removed)
 
-While a turn runs, everything stays visible — the native "Deep diving…" status with its clock is the running indicator. The moment the turn completes (the final answer lands), the process content of that turn — thinking rows, tool calls, intermediate text — collapses into a single header line: **已完成 · 时长** (errored/stopped turns show 已出错/已停止 instead). Mid-run steering interjections collapse with the turn; the header shows「· N 条插话」when present. What stays visible: your prompt, the final summary reply, and its action row (copy etc.). Click the header to expand the full process; click again to collapse. Expand/collapse choices live in memory only; a fresh page load starts collapsed.
-
-The plan is computed entirely from the session snapshot: turn grouping via `chat.locations`, completion via the turn's `turn/end` reason, the summary reply via the official `turn-tail` node's `closing` pointer, duration from the turn's start/end timestamps (same figures the native clock shows). Toggle under **Settings → General → Turn Folding**.
+DSH 0.1.2+ ships turn-process folding natively (`dsh-client-ui-chat`, default **Settings → Conversation display → Compact**), so this plugin's turn-fold module was retired to avoid double folding. The built-in header shows message/subagent counts only; if you want duration or steering counts back, the module can be revived as a complement to the native Normal mode.
 
 ### Semantic search (`context_search`)
 
@@ -89,7 +86,6 @@ Open http://127.0.0.1:3080 — the plugin activates automatically. A restart is 
 | Setting | Default | Description |
 |---|---|---|
 | Thinking Tag Markers | `["</thinking>"]` | Strings that split reasoning from body text. Multiple supported. Edit at **Settings → General**. |
-| Turn Folding | on | Auto-collapse finished turns' process into a one-line header. Edit at **Settings → General**. |
 | Windsurf API Key | — | Credential for `context_search`. See key resolution above. No key ⇒ tool not registered. |
 
 ## Requirements
@@ -108,10 +104,8 @@ node test/host-prompt-enhance.test.mjs
 node test/resume-gate.test.mjs
 node test/resume-route.test.mjs
 node test/resume-continuity.test.mjs
-node test/turn-fold.test.mjs
 node test/fast-context-gate.test.mjs
 node test/content-embed.test.mjs
-node scripts/repro-switch-back.cjs
 node --check lib/client.js
 ```
 

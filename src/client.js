@@ -81,14 +81,6 @@ function apply(ctx) {
     );
   });
 
-  // 2c. Turn folding toggle
-  slots.inject("settings.general.item", function () {
-    return slots.register(
-      { name: "settings.general.item", id: "turn-fold", order: 50 },
-      function () { return React.createElement(createTurnFoldSetting(React)); }
-    );
-  });
-
   // 3. Prompt enhance button. Registered in conversation.input.right, which
   //    renders BEFORE the model select and context meter — the component only
   //    drops a hidden anchor there and inserts its own DOM button just left of
@@ -126,17 +118,6 @@ function apply(ctx) {
     );
   });
 
-  // 3d. 回合过程折叠：隐藏锚点挂在输入行，同步器观察聊天列 DOM +
-  //     会话快照，把已完成 turn 的过程收起为「已完成 · 时长」一行。
-  //     会话切换收敛需要拆掉两个模块的注入头再重建（注入头是 React 不管理
-  //     的外来节点，跨会话原地泄漏），因此把 tool-group 的复位/重建函数
-  //     经 DI 传入——缺省参数下行为退化为纯 tf 同步（测试环境用）。
-  slots.inject("conversation.input.right", function () {
-    return slots.register(
-      { name: "conversation.input.right", id: "dsao-turn-fold", order: 110, locale: "conversation" },
-      createTurnFold(React, resetToolGroups, scanToolGroups).TurnFoldMount
-    );
-  });
 
   // 4. Mermaid post-processor
   ctx.effect(function () { return startMermaidObserver(); });
