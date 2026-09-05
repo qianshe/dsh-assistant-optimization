@@ -115,6 +115,7 @@ node test/fast-context-gate.test.mjs
 node test/content-embed.test.mjs
 node test/turn-fold-sync.test.mjs
 node scripts/repro-switch-back.cjs
+node scripts/lib-sync-check.cjs
 node --check lib/client.js
 ```
 

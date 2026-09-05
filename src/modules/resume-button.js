@@ -62,7 +62,10 @@ function createResumeButton(React, gateMod) {
 		sessionRef.current = session
 		var chatRef = React.useRef(chatSnapshot)
 		chatRef.current = chatSnapshot
-		var draftRef = React.useRef(typeof (inputState && inputState.draft) === 'string' ? inputState.draft : '')
+		var gateSyncRefRef = React.useRef(null)
+		var draft = typeof (inputState && inputState.draft) === 'string' ? inputState.draft : ''
+		var draftRef = React.useRef(draft)
+		draftRef.current = draft
 
 		// dsh 0.1.2：门控快照 = 会话生命周期 + 聊天时间线合成旧 session.chat 形状
 		// （resume-gate 纯函数契约不变）。running 缺失时从聊天时间线派生——
@@ -83,6 +86,11 @@ function createResumeButton(React, gateMod) {
 			return Object.assign({}, s, { chat: c, running: running })
 		}
 
+		// v1.8.1 去轮询：session/chat/input 快照都是响应式 Hook——快照变化即
+		// 重渲染，渲染期用纯函数重评门控，下方 effect 按结论同步按钮态。
+		// 原 400ms 轮询与失败后的补偿重扫一并移除。
+		var verdict = gateMod.canResume(gateSnapshot(), draftRef.current)
+
 		React.useEffect(function () {
 			var marker = markerRef.current
 			if (!marker || !marker.parentNode) return
@@ -102,12 +110,7 @@ function createResumeButton(React, gateMod) {
 
 			var active = false
 			var busy = false
-			var settleTimer = null
 			var hijackedBtn = null
-
-			function clearSettle() {
-				if (settleTimer !== null) { clearTimeout(settleTimer); settleTimer = null }
-			}
 
 			function requestResume(sessionId) {
 				return fetch(RESUME_ENDPOINT, {
@@ -186,13 +189,10 @@ function createResumeButton(React, gateMod) {
 					if (verdict.canResume !== true) return
 					var sessionId = snap && typeof snap.sessionId === 'string' ? snap.sessionId : ''
 					if (sessionId === '') return
-					deactivate()
+					// 不提前 deactivate：请求失败时 ▶ 留存可重试；成功后快照变化
+					//（新 turn 开启）经响应式门控自动熄灭并还原原生按钮。
 					busy = true
-					requestResume(sessionId).then(function () {
-						settleTimer = setTimeout(function () { busy = false; poll() }, 1200)
-					}).catch(function () {
-						settleTimer = setTimeout(function () { busy = false; poll() }, 2600)
-					})
+					requestResume(sessionId).then(function () { busy = false }).catch(function () { busy = false })
 				}
 				btn.addEventListener('click', onCaptureClick, true)
 				btn._dsaoHijackRemover = function () {
@@ -207,20 +207,18 @@ function createResumeButton(React, gateMod) {
 				}
 			}
 
-			function poll() {
-				if (busy) return
-				var verdict = gateMod.canResume(gateSnapshot(), draftRef.current)
-				var shouldActivate = verdict.canResume === true
+			// 门控 → 按钮态同步（activate/deactivate 均幂等）。由 verdict effect
+			// 在快照变化时驱动；挂载时先对齐一次。
+			function syncGate() {
+				var v = gateMod.canResume(gateSnapshot(), draftRef.current)
 				var btn = findPrimaryButton(trailing)
 				if (!btn) return
-				if (shouldActivate) {
-					activate(btn)
-				} else {
-					deactivate()
-				}
+				if (v.canResume === true) activate(btn)
+				else deactivate()
 			}
+			gateSyncRefRef.current = syncGate
 
-			var timer = setInterval(poll, 400)
+			syncGate()
 
 			// React 重画按钮时，如果仍处于激活态，确保标记和播放图标在位。
 			var domObs = new MutationObserver(function () {
@@ -258,16 +256,15 @@ function createResumeButton(React, gateMod) {
 
 			return function () {
 				domObs.disconnect()
-				clearInterval(timer)
-				clearSettle()
 				deactivate()
+				gateSyncRefRef.current = null
 			}
 		})
 
+		// 门控结论变化 → 同步按钮态（原 400ms 轮询的响应式替代）
 		React.useEffect(function () {
-			// sessionRef/chatRef update during render via dsh 0.1.2 hooks
-			draftRef.current = typeof (inputState && inputState.draft) === 'string' ? inputState.draft : ''
-		})
+			if (gateSyncRefRef.current) gateSyncRefRef.current()
+		}, [verdict.canResume, verdict.reason, verdict.terminalKind])
 
 		return React.createElement('span', {
 			ref: markerRef,
