@@ -476,10 +476,10 @@ if (!markerVisibleExpanded || !markerHiddenCollapsed || !endMarkOk || !endMarkCl
   console.log('✓ [场景 9] 展开：marker 可见 + 收尾分割线；收起：均恢复');
 }
 
-// 场景 10：状态图标随归并刷新 —— 折叠头在中间段单独成组时以 error 建（红点），
-// 链归并后状态取末段（已完成），updateHeader 必须同步刷新图标，否则出现
-// 「红点 + 已完成」错位（真实截图 bug）。
-console.log('── 场景 10：状态图标随归并刷新 ──');
+// 场景 10：头部状态随归并刷新 —— 折叠头在中间段单独成组时以 error 建，
+// 链归并后状态取末段（已完成），updateHeader 必须同步 data-dsao-tf-reason
+// 与文案（v1.8.0 官方样式头部无图标元素，契约落在 reason 属性上）。
+console.log('── 场景 10：头部状态随归并刷新 ──');
 {
   const sessionE = makeSession([
     { tools: 2, start: 0, end: 5000, keyPrefix: 'E1', reason: 'error' },
@@ -492,22 +492,19 @@ console.log('── 场景 10：状态图标随归并刷新 ──');
   tg.scanToolGroups(doc.body);
   tf.applyPlanToColumn(column, tf.planTurnFold(sessionE), {});
   let hdr10 = column.querySelector('[data-dsao-tf-header]');
-  const wasRed = !!(hdr10 && hdr10.querySelector('.dsao-tf-headerIcon') &&
-    hdr10.querySelector('.dsao-tf-headerIcon').getAttribute('data-state') === 'error');
+  const wasError = !!(hdr10 && hdr10.getAttribute('data-dsao-tf-reason') === 'error');
   // 归并后的会话：turn0 键相同（头留存），turn1 为 marker 续跑段
   renderItems(column, sessionE2);
   tf.applyPlanToColumn(column, tf.planTurnFold(sessionE2), {});
   hdr10 = column.querySelector('[data-dsao-tf-header]');
   const reasonNow = hdr10 ? hdr10.getAttribute('data-dsao-tf-reason') : null;
-  const icon10 = hdr10 ? hdr10.querySelector('.dsao-tf-headerIcon') : null;
-  const stateNow = icon10 ? icon10.getAttribute('data-state') : null;
   const text10 = hdr10 && hdr10.querySelector('.dsao-tf-headerText') ? hdr10.querySelector('.dsao-tf-headerText').textContent : '';
-  console.log(`  先建错误头(红点)=${wasRed}，归并后 reason=${reasonNow} state=${stateNow} text="${text10}"`);
-  if (!wasRed || reasonNow !== 'completed' || stateNow !== 'ok' || text10.indexOf('已完成') !== 0) {
+  console.log(`  先建错误头=${wasError}，归并后 reason=${reasonNow} text="${text10}"`);
+  if (!wasError || reasonNow !== 'completed' || text10.indexOf('已完成') !== 0) {
     failures++;
-    console.log('✗ [场景 10] 图标未随归并刷新（红点 + 已完成 错位）');
+    console.log('✗ [场景 10] 头部状态未随归并刷新');
   } else {
-    console.log('✓ [场景 10] 图标随归并刷新为已完成');
+    console.log('✓ [场景 10] 头部状态随归并刷新为已完成');
   }
 }
 

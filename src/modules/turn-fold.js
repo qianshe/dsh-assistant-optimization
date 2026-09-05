@@ -11,7 +11,7 @@
 //       - 用户消息（user / steering / command）与结果行（turn-error 等）
 //   · 点折叠头展开看全过程，再点收起；用户选择只保存在内存（刷新后默认收起）。
 //
-// 数据源（全部来自会话快照，不靠 DOM 猜测）：
+// 数据源（dsh 0.1.2：useChat() 的 ChatSnapshot，形状兼容旧 session.chat，
 //   session.chat.order      有序节点 key 数组
 //   session.chat.nodes      Map<key, { key, kind, data, location }>
 //   session.chat.locations  getTurn(n) → 该 turn 的节点 key 数组（流程顺序）
@@ -335,99 +335,97 @@ function planTurnFold(session) {
 
 // ── DOM 层 ────────────────────────────────────────────────────────────────
 
-// ── 折叠头样式：对齐官方 TurnProcessNodeView（l_V-RG）规格 ──
-// 官方：border-bottom .5px l2 / height 33px / padding 0 0 8px / 折叠态 margin-bottom 8px /
-// chevron 左置 16px tertiary（展开 rotate(0)、折叠 rotate(-90deg)，0.1s）/ 文字 14px/24px ellipsis /
-// prefers-reduced-motion。增强：状态图标、运行时长、插话计数。
-var CSS = [
-  "[data-dsao-tf-hidden]{display:none!important}",
-  "[data-dsao-tf-closing-folded] [data-variant=\"think\"]{display:none!important}",
-  "[data-dsao-tf-process-end]{border-bottom:1px solid var(--dsw-alias-border-l2)}",
-  "@keyframes dsao-tf-pulse{0%,100%{opacity:.35}50%{opacity:1}}",
-  ".dsao-tf-running{display:flex;align-items:center;box-sizing:border-box;border:none;border-bottom:.5px solid var(--dsw-alias-border-l2);width:100%;min-width:0;height:33px;color:var(--dsw-alias-label-secondary);cursor:default;text-align:left;background:0 0;padding:0 0 8px}",
-  ".dsao-tf-runningIcon{width:16px;height:16px;flex:none;display:inline-flex;align-items:center;justify-content:center;color:var(--dsw-alias-brand-primary);margin-right:6px}",
-  ".dsao-tf-runningDot{width:8px;height:8px;border-radius:50%;background:currentColor;animation:dsao-tf-pulse 1.2s ease-in-out infinite}",
-  ".dsao-tf-runningText{font-weight:400;white-space:nowrap;min-width:0;font-size:14px;line-height:24px}",
-  ".dsao-tf-header{box-sizing:border-box;border:none;border-bottom:.5px solid var(--dsw-alias-border-l2);width:100%;min-width:0;height:33px;color:var(--dsw-alias-label-secondary);cursor:pointer;text-align:left;background:0 0;align-items:center;padding:0 0 8px;display:flex}",
-  ".dsao-tf-header:not([data-dsao-tf-state=\"expanded\"]){margin-bottom:8px}",
-  ".dsao-tf-chevron{width:16px;height:16px;color:var(--dsw-alias-label-tertiary);flex:none;margin-right:6px;transition:transform .1s;transform:rotate(-90deg);display:inline-flex}",
-  ".dsao-tf-header[data-dsao-tf-state=\"expanded\"] .dsao-tf-chevron{transform:rotate(0)}",
-  ".dsao-tf-headerIcon{width:16px;height:16px;flex:none;display:inline-flex;align-items:center;justify-content:center;color:var(--dsw-alias-label-tertiary);margin-right:6px}",
-  ".dsao-tf-headerIcon[data-state=error]{color:var(--dsw-alias-state-error-primary)}",
-  ".dsao-tf-headerText{font-weight:400;text-overflow:ellipsis;white-space:nowrap;min-width:0;font-size:14px;line-height:24px;overflow:hidden}",
-  ".dsao-tf-headerSpacer{flex:auto}",
-  ".dsao-tf-steerCount{flex:none;color:var(--dsw-alias-label-tertiary);font-size:14px;line-height:24px;margin-right:0;white-space:nowrap}",
-  '[data-dsao-tf-steer="0"]{display:none!important}',
-  "@media (prefers-reduced-motion:reduce){.dsao-tf-chevron{transition:none}}",
-].join("");
+     // ── 折叠头样式：对齐官方 TurnProcessNodeView（l_V-RG）规格 ──
+   // 官方：border-bottom .5px l2 / height 33px / padding 0 0 8px / 折叠态 margin-bottom 8px /
+   // chevron 左置 16px tertiary（展开 rotate(0)、折叠 rotate(-90deg)，0.1s）/ 文字 14px/24px ellipsis /
+   // prefers-reduced-motion。增强（官方没有的）：状态图标、运行时长、插话计数。
+   var CSS = [
+      "[data-dsao-tf-hidden]{display:none!important}",
+      "[data-dsao-tf-closing-folded] [data-variant=\"think\"]{display:none!important}",
+      "[data-dsao-tf-process-end]{border-bottom:1px solid var(--dsw-alias-border-l2)}",
+      "@keyframes dsao-tf-pulse{0%,100%{opacity:.35}50%{opacity:1}}",
+      // 运行中行：官方 turnStatus 字体规格
+      ".dsao-tf-running{display:flex;align-items:center;box-sizing:border-box;border:none;border-bottom:.5px solid var(--dsw-alias-border-l2);width:100%;min-width:0;height:33px;color:var(--dsw-alias-label-secondary);cursor:default;text-align:left;background:0 0;padding:0 0 8px}",
+      ".dsao-tf-runningIcon{width:16px;height:16px;flex:none;display:inline-flex;align-items:center;justify-content:center;color:var(--dsw-alias-brand-primary);margin-right:6px}",
+      ".dsao-tf-runningDot{width:8px;height:8px;border-radius:50%;background:currentColor;animation:dsao-tf-pulse 1.2s ease-in-out infinite}",
+      ".dsao-tf-runningText{font-weight:400;white-space:nowrap;min-width:0;font-size:14px;line-height:24px}",
+      // 折叠头：官方 root 规格（含折叠态 margin-bottom 8px）
+      ".dsao-tf-header{box-sizing:border-box;border:none;border-bottom:.5px solid var(--dsw-alias-border-l2);width:100%;min-width:0;height:33px;color:var(--dsw-alias-label-secondary);cursor:pointer;text-align:left;background:0 0;align-items:center;padding:0 0 8px;display:flex}",
+      ".dsao-tf-header:not([data-dsao-tf-state=\"expanded\"]){margin-bottom:8px}",
+      // chevron（官方同位：最左 16px tertiary）
+      ".dsao-tf-chevron{width:16px;height:16px;color:var(--dsw-alias-label-tertiary);flex:none;margin-left:6px;transition:transform .1s;transform:rotate(-90deg);display:inline-flex}",
+      ".dsao-tf-header[data-dsao-tf-state=\"expanded\"] .dsao-tf-chevron{transform:rotate(0)}",
+      // 状态图标（增强）：紧随 chevron
+      // 文字（官方 label 规格）：ellipsis 防溢出
+      ".dsao-tf-headerText{font-weight:400;text-overflow:ellipsis;white-space:nowrap;min-width:0;font-size:14px;line-height:24px;overflow:hidden}",
+      ".dsao-tf-headerSpacer{flex:auto}",
+      // 插话计数（增强）：右置 tertiary
+      ".dsao-tf-steerCount{flex:none;color:var(--dsw-alias-label-tertiary);font-size:14px;line-height:24px;margin-right:0;white-space:nowrap}",
+      '[data-dsao-tf-steer="0"]{display:none!important}',
+      "@media (prefers-reduced-motion:reduce){.dsao-tf-chevron{transition:none}}",
+   ].join("");
 
-function ensureStyles(doc) {
-  var existing = doc.getElementById("dsao-turn-fold-css");
-  if (existing) {
-    if (existing.textContent !== CSS) existing.textContent = CSS;
-    return;
+  function ensureStyles(doc) {
+    var existing = doc.getElementById("dsao-turn-fold-css");
+    if (existing) {
+      if (existing.textContent !== CSS) existing.textContent = CSS;
+      return;
+    }
+    var style = doc.createElement("style");
+    style.id = "dsao-turn-fold-css";
+    style.textContent = CSS;
+    doc.head.appendChild(style);
   }
-  var style = doc.createElement("style");
-  style.id = "dsao-turn-fold-css";
-  style.textContent = CSS;
-  doc.head.appendChild(style);
-}
 
-var ICON_CHECK = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M13.5 4.5l-6.4 7-4.1-3.6 1-1.1 3 2.6 5.4-5.9z" fill="currentColor"/></svg>';
-var ICON_STOP = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="3.5" y="3.5" width="9" height="9" rx="2" fill="currentColor"/></svg>';
-var ICON_ERROR = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.5" fill="currentColor"/></svg>';
-var CHEVRON_SVG = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5.5 2.15137L5.92383 2.57617L8.65137 5.30273C8.90706 5.55843 9.13382 5.78438 9.29785 5.98828C9.46883 6.20088 9.61756 6.44405 9.66602 6.75C9.69222 6.91565 9.69222 7.08435 9.66602 7.25C9.61756 7.55595 9.46883 7.79912 9.29785 8.01172C9.13382 8.21561 8.90706 8.44157 8.65137 8.69727L5.92383 11.4238L5.5 11.8486L4.65137 11L5.07617 10.5762L7.80273 7.84863C8.07732 7.57405 8.24849 7.40124 8.3623 7.25977C8.46904 7.12709 8.47813 7.07728 8.48047 7.0625C8.48703 7.02105 8.48703 6.97895 8.48047 6.9375C8.47813 6.92272 8.47813 6.87291 8.3623 6.74023C8.24848 6.59876 8.07732 6.42595 7.80273 6.15137L5.07617 3.42383L4.65137 3L5.5 2.15137Z" fill="currentColor"/></svg>';
+  var ICON_CHECK = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M13.5 4.5l-6.4 7-4.1-3.6 1-1.1 3 2.6 5.4-5.9z" fill="currentColor"/></svg>';
+  var ICON_STOP = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="3.5" y="3.5" width="9" height="9" rx="2" fill="currentColor"/></svg>';
+  var ICON_ERROR = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.5" fill="currentColor"/></svg>';
+  var CHEVRON_SVG = "<svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M11.8486 5.5L11.4238 5.92383L8.69727 8.65137C8.44157 8.90706 8.21562 9.13382 8.01172 9.29785C7.79912 9.46883 7.55595 9.61756 7.25 9.66602C7.08435 9.69222 6.91565 9.69222 6.75 9.66602C6.44405 9.61756 6.20088 9.46883 5.98828 9.29785C5.78438 9.13382 5.55843 8.90706 5.30273 8.65137L2.57617 5.92383L2.15137 5.5L3 4.65137L3.42383 5.07617L6.15137 7.80273C6.42595 8.07732 6.59876 8.24849 6.74023 8.3623C6.87291 8.46904 6.92272 8.47813 6.9375 8.48047C6.97895 8.48703 7.02105 8.48703 7.0625 8.48047C7.07728 8.47813 7.12709 8.46904 7.25977 8.3623C7.40124 8.24849 7.57405 8.07732 7.84863 7.80273L10.5762 5.07617L11 4.65137L11.8486 5.5Z\" fill=\"currentColor\"/></svg>";
 
-function iconForReason(reasonKind) {
-  if (reasonKind === "error") return ICON_ERROR;
-  if (reasonKind === "aborted" || reasonKind === "max-tokens") return ICON_STOP;
-  return ICON_CHECK;
-}
+  function iconForReason(reasonKind) {
+    if (reasonKind === "error") return ICON_ERROR;
+    if (reasonKind === "aborted" || reasonKind === "max-tokens") return ICON_STOP;
+    return ICON_CHECK;
+  }
 
-// 结构对齐官方 TurnProcessNodeView：chevron 最左、label 随后；增强项（状态图标、插话计数）
-// 按官方 16px+6px 间距节奏内插。
-function createHeader(fold, doc) {
-  var header = doc.createElement("div");
-  header.className = "dsao-tf-header";
-  header.setAttribute("data-dsao-tf-header", String(fold.turn));
-  header.setAttribute("data-dsao-tf-state", "collapsed");
-  header.setAttribute("data-dsao-tf-reason", fold.reasonKind);
-  header.setAttribute("role", "button");
-  header.setAttribute("tabindex", "0");
-  header.setAttribute("aria-expanded", "false");
-  header.setAttribute("aria-label", fold.headerText);
+  function createHeader(fold, doc) {
+    // 结构对齐官方 TurnProcessNodeView：chevron 最左、label 随后；增强项
+    // （状态图标、插话计数）按官方 16px+6px 间距节奏内插。
+    var header = doc.createElement("div");
+    header.className = "dsao-tf-header";
+    header.setAttribute("data-dsao-tf-header", String(fold.turn));
+    header.setAttribute("data-dsao-tf-state", "collapsed");
+    header.setAttribute("data-dsao-tf-reason", fold.reasonKind);
+    header.setAttribute("role", "button");
+    header.setAttribute("tabindex", "0");
+    header.setAttribute("aria-expanded", "false");
+    header.setAttribute("aria-label", fold.headerText);
 
-  // chevron（官方位：最左，16px tertiary）
-  var chevron = doc.createElement("span");
-  chevron.className = "dsao-tf-chevron";
-  chevron.innerHTML = CHEVRON_SVG;
+    // chevron（官方位：最左，16px tertiary）
+    var text = doc.createElement("span");
+      text.className = "dsao-tf-headerText";
+      text.textContent = fold.headerText;
 
-  // 状态图标（增强）：完成✓/停止■/出错●
-  var icon = doc.createElement("span");
-  icon.className = "dsao-tf-headerIcon";
-  icon.setAttribute("data-state", fold.reasonKind === "error" ? "error" : "ok");
-  icon.innerHTML = iconForReason(fold.reasonKind);
+      var chevron = doc.createElement("span");
+      chevron.className = "dsao-tf-chevron";
+      chevron.innerHTML = CHEVRON_SVG;
 
-  var text = doc.createElement("span");
-  text.className = "dsao-tf-headerText";
-  text.textContent = fold.headerText;
+    var spacer = doc.createElement("span");
+    spacer.className = "dsao-tf-headerSpacer";
 
-  var spacer = doc.createElement("span");
-  spacer.className = "dsao-tf-headerSpacer";
+    // 插话计数（增强）：右置独立元素；0 时经 CSS 隐藏。
+    var steer = doc.createElement("span");
+    steer.className = "dsao-tf-steerCount";
+    steer.setAttribute("data-dsao-tf-steer", String(fold.steeringCount || 0));
+    steer.textContent = (fold.steeringCount || 0) > 0 ? fold.steeringCount + " 条插话" : "";
 
-  // 插话计数（增强）：右置独立元素；0 时经 CSS 隐藏。
-  var steer = doc.createElement("span");
-  steer.className = "dsao-tf-steerCount";
-  steer.setAttribute("data-dsao-tf-steer", String(fold.steeringCount || 0));
-  steer.textContent = (fold.steeringCount || 0) > 0 ? fold.steeringCount + " 条插话" : "";
+    header.appendChild(text);
+    header.appendChild(chevron);
+    header.appendChild(spacer);
+    header.appendChild(steer);
+    return header;
+  }
 
-  header.appendChild(chevron);
-  header.appendChild(icon);
-  header.appendChild(text);
-  header.appendChild(spacer);
-  header.appendChild(steer);
-  return header;
-}
 
 function updateHeader(header, fold, expanded) {
   header.setAttribute("data-dsao-tf-state", expanded ? "expanded" : "collapsed");
@@ -448,11 +446,6 @@ function updateHeader(header, fold, expanded) {
   // 图标滞留会出现「红点 + 已完成」错位。
   if (header.getAttribute("data-dsao-tf-reason") !== fold.reasonKind) {
     header.setAttribute("data-dsao-tf-reason", fold.reasonKind);
-    var icon = header.querySelector(".dsao-tf-headerIcon");
-    if (icon) {
-      icon.setAttribute("data-state", fold.reasonKind === "error" ? "error" : "ok");
-      icon.innerHTML = iconForReason(fold.reasonKind);
-    }
   }
 }
 
@@ -749,8 +742,9 @@ function createTurnFold(React, resetGroups, rescanGroups) {
    */
   function TurnFoldMount(props) {
     var markerRef = React.useRef(null);
-    var sessionRef = React.useRef(props.session);
-    sessionRef.current = props.session;
+    var chatSnapshot = typeof props.useChat === "function" ? props.useChat(function (s) { return s; }) : null;
+    var sessionRef = React.useRef(null);
+    sessionRef.current = chatSnapshot ? { chat: chatSnapshot } : null;
     var sessionIdRef = React.useRef(props.sessionId);
     sessionIdRef.current = props.sessionId;
     var syncRef = React.useRef(null);
@@ -1112,7 +1106,7 @@ function createTurnFold(React, resetGroups, rescanGroups) {
       var t3 = setTimeout(run, 900);
       var t4 = setTimeout(run, 2000);
       return function () { clearTimeout(t2); clearTimeout(t3); clearTimeout(t4); };
-    }, [props.session, props.sessionId]);
+    }, [chatSnapshot, props.sessionId]);
 
     return React.createElement("span", { ref: markerRef, style: { display: "none" } });
   }

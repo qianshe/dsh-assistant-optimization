@@ -36,9 +36,14 @@ var CSS = [
   '@keyframes dsao-enh-breathe{0%,100%{opacity:.55}50%{opacity:1}}',
   '[data-dsao-enhance-btn][data-state="busy"]{animation:dsao-enh-breathe 1.4s ease-in-out infinite}',
   '[data-dsao-enhance-btn] .dsao-enh-spinner{transform-origin:8px 8px;animation:dsao-enh-spin .7s linear infinite}',
-  '[data-dsao-enhance-btn] .dsao-enh-label{max-width:0;opacity:0;overflow:hidden;white-space:nowrap;transition:max-width 180ms ease,opacity 180ms ease,margin-left 180ms ease;margin-left:0}',
+  '[data-dsao-enhance-btn] .dsao-enh-label{max-width:0;opacity:0;overflow:hidden;white-space:nowrap;transition:max-width 180ms ease,opacity 180ms ease,margin-left 180ms ease;margin-left:0;font-size:13px;font-weight:500;line-height:20px;color:inherit}',
   '[data-dsao-enhance-btn][data-state="busy"] .dsao-enh-label{max-width:52px;opacity:1;margin-left:4px}',
-  '[data-dsao-enhance-btn]{position:relative}',
+  '[data-dsao-enhance-btn][data-state="idle"]:not(:disabled) .dsao-enh-label{max-width:36px;opacity:1;margin-left:4px}',
+  '[data-dsao-enhance-btn]{position:relative;min-width:0;height:28px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-radius:24px;outline:none;align-items:center;gap:4px;padding:0 4px 0 8px;font-size:13px;font-weight:500;line-height:20px;display:inline-flex;transition:background 120ms,color 120ms}',
+  '[data-dsao-enhance-btn]:not(:disabled):hover{background:var(--dsw-alias-interactive-bg-hover)}',
+  '[data-dsao-enhance-btn]:focus-visible{box-shadow:0 0 0 2px var(--dsw-alias-border-l3)}',
+  '[data-dsao-enhance-btn]:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}',
+  '[data-dsao-enhance-btn] svg{flex:none}',
   '[data-dsao-enhance-btn]::after{',
     'content:attr(data-dsao-tip);',
     'position:absolute;',
@@ -147,8 +152,12 @@ function createPromptEnhance(React, contextMod) {
     // flow: the enhance button would only occupy the tool row (and, while the
     // subagent runs, jostle the interrupt controls). Hide the button and skip
     // all placement/network logic -- no anchor, no button, no controller.
-    var isSubagent = props.session !== null && typeof props.session === 'object' &&
-      props.session.subagent !== null && props.session.subagent !== undefined
+    // dsh 0.1.2 selector hooks 必须传 selector；identity 选择整个快照。
+    var session = typeof props.useSession === 'function' ? props.useSession(function (s) { return s; }) : null
+    var inputState = typeof props.useInput === 'function' ? props.useInput(function (s) { return s; }) : null
+    var chatSnapshot = typeof props.useChat === 'function' ? props.useChat(function (s) { return s; }) : null
+    var isSubagent = session !== null && typeof session === 'object' &&
+      session.subagent !== null && session.subagent !== undefined
 
     var markerRef = React.useRef(null)
     var apiRef = React.useRef(null)
@@ -158,7 +167,7 @@ function createPromptEnhance(React, contextMod) {
     var lastRefRef = React.useRef('')
     var contextRef = React.useRef({ project: '', cwd: '', instructions: '', summary: '', history: '', replies: '' })
 
-    var input = props.input || {}
+    var input = inputState || {}
     var draft = typeof input.draft === 'string' ? input.draft : ''
     var phase = input.phase
     var blocked = draft.trim() === '' || (phase !== undefined && phase !== 'plain')
@@ -170,7 +179,14 @@ function createPromptEnhance(React, contextMod) {
     var identity = function (s) { return s }
     var sessions = typeof props.useSessions === 'function' ? props.useSessions(identity) : null
     var workspaces = typeof props.useWorkspaces === 'function' ? props.useWorkspaces(identity) : null
-    contextRef.current = contextMod.readContext(props.session, sessions, workspaces)
+    var legacyNodes = chatSnapshot && chatSnapshot.legacy && Array.isArray(chatSnapshot.legacy.nodes)
+      ? chatSnapshot.legacy.nodes
+      : []
+    contextRef.current = contextMod.readContext(
+      session ? { sessionId: session.sessionId, nodes: legacyNodes } : null,
+      sessions,
+      workspaces
+    )
 
     React.useEffect(function () {
       if (isSubagent) return

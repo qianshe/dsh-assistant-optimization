@@ -171,9 +171,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   ], 'sess-A');
   const sessionB = makeSession([{ tools: 2, start: 1, end: 5000, keyPrefix: 'B1' }], 'sess-B');
 
+// v1.8.0 供给端契约：挂载读 props.useChat(selector)（renderer 把 inject face 的
+// hooks.chat 源包装成选择器 Hook）+ props.sessionId。harness 用普通函数模拟
+// 选择器 Hook（无响应性，由驱动器手动换快照重渲）。
+const useChatOf = (session) => (sel) => sel(session.chat);
+
   // 1. 挂载 + 会话 A
   renderItems(column, sessionA);
-  mountOrUpdate({ session: sessionA, sessionId: 'sess-A' });
+  mountOrUpdate({ sessionId: 'sess-A', useChat: useChatOf(sessionA) });
   await sleep(2300); // 等 0/300/900/2000 sweep 全部落地
   const s1 = snapshotState('mount A');
   if (s1.tfHeaders.length !== 2 || s1.hidden !== s1.toolCalls) {
@@ -182,14 +187,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   // 2. 切到会话 B（React 换 keyed 子元素，注入头泄漏留存）
   renderItems(column, sessionB);
-  mountOrUpdate({ session: sessionB, sessionId: 'sess-B' });
+  mountOrUpdate({ sessionId: 'sess-B', useChat: useChatOf(sessionB) });
   await sleep(2300);
   const s2 = snapshotState('switch B');
   if (s2.tfHeaders.length !== 1) { failures++; console.log('✗ 切 B 后 tf 头数量异常'); } else console.log('✓ 切 B 后收敛');
 
   // 3. 切回 A
   renderItems(column, sessionA);
-  mountOrUpdate({ session: sessionA, sessionId: 'sess-A' });
+  mountOrUpdate({ sessionId: 'sess-A', useChat: useChatOf(sessionA) });
   await sleep(2300);
   const s3 = snapshotState('back A');
   if (s3.tfHeaders.length !== 2 || s3.hidden !== s3.toolCalls) {
@@ -214,7 +219,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       ? { top: 300, bottom: 320, height: 20, width: 100 }
       : { top: 180, bottom: 200, height: 20, width: 100 };
   };
-  mountOrUpdate({ session: sessionA, sessionId: 'sess-A' }); // 同会话 → 轻量 sync
+  mountOrUpdate({ sessionId: 'sess-A', useChat: useChatOf(sessionA) }); // 同会话 → 轻量 sync
   await sleep(300); // 防抖 80ms + 余量
   const okScroll = wrap.scrollTop === 500 - 120;
   console.log(`  scrollTop=${wrap.scrollTop}（期望 380），锚点测量 ${gCalls} 次`);

@@ -55,8 +55,33 @@ function findPrimaryButton(trailing) {
 function createResumeButton(React, gateMod) {
 	function ResumeMount(props) {
 		var markerRef = React.useRef(null)
-		var sessionRef = React.useRef(props.session)
-		var draftRef = React.useRef(typeof (props.input && props.input.draft) === 'string' ? props.input.draft : '')
+		var session = typeof props.useSession === 'function' ? props.useSession(function (s) { return s; }) : null
+		var chatSnapshot = typeof props.useChat === 'function' ? props.useChat(function (s) { return s; }) : null
+		var inputState = typeof props.useInput === 'function' ? props.useInput(function (s) { return s; }) : null
+		var sessionRef = React.useRef(session)
+		sessionRef.current = session
+		var chatRef = React.useRef(chatSnapshot)
+		chatRef.current = chatSnapshot
+		var draftRef = React.useRef(typeof (inputState && inputState.draft) === 'string' ? inputState.draft : '')
+
+		// dsh 0.1.2：门控快照 = 会话生命周期 + 聊天时间线合成旧 session.chat 形状
+		// （resume-gate 纯函数契约不变）。running 缺失时从聊天时间线派生——
+		// 任一 turn open 即运行中；该字段缺失会导致 ▶ 在运行中永不熄灭。
+		function gateSnapshot() {
+			var s = sessionRef.current
+			var c = chatRef.current
+			if (!s) return null
+			if (!c) return s
+			var running = s.running
+			if (running === undefined) {
+				running = false
+				var turns = c.timeline && c.timeline.turns
+				if (turns && typeof turns.forEach === 'function') {
+					turns.forEach(function (turn) { if (turn && turn.status === 'open') running = true })
+				}
+			}
+			return Object.assign({}, s, { chat: c, running: running })
+		}
 
 		React.useEffect(function () {
 			var marker = markerRef.current
@@ -156,7 +181,7 @@ function createResumeButton(React, gateMod) {
 					ev.stopPropagation()
 					ev.preventDefault()
 					if (busy) return
-					var snap = sessionRef.current
+					var snap = gateSnapshot()
 					var verdict = gateMod.canResume(snap, draftRef.current)
 					if (verdict.canResume !== true) return
 					var sessionId = snap && typeof snap.sessionId === 'string' ? snap.sessionId : ''
@@ -184,7 +209,7 @@ function createResumeButton(React, gateMod) {
 
 			function poll() {
 				if (busy) return
-				var verdict = gateMod.canResume(sessionRef.current, draftRef.current)
+				var verdict = gateMod.canResume(gateSnapshot(), draftRef.current)
 				var shouldActivate = verdict.canResume === true
 				var btn = findPrimaryButton(trailing)
 				if (!btn) return
@@ -240,8 +265,8 @@ function createResumeButton(React, gateMod) {
 		})
 
 		React.useEffect(function () {
-			sessionRef.current = props.session
-			draftRef.current = typeof (props.input && props.input.draft) === 'string' ? props.input.draft : ''
+			// sessionRef/chatRef update during render via dsh 0.1.2 hooks
+			draftRef.current = typeof (inputState && inputState.draft) === 'string' ? inputState.draft : ''
 		})
 
 		return React.createElement('span', {

@@ -188,6 +188,43 @@ function isTransparentNode(el) {
 }
 
 /**
+ * Collect text content OUTSIDE [data-variant="think"] subtrees: start from
+ * el.textContent and subtract every think row's own text, at ANY depth
+ * (real DOM nests them: flowItem > markdown root > body > ProcessReasoning >
+ * ReasoningRow). think 行文本互不重叠，逐条 split/join 扣除后剩余即非思考
+ * 内容。Test stub: textContent is the element's OWN text (flat model), so
+ * the subtraction is a no-op and the return value is already correct.
+ */
+function textOutsideThink(el) {
+  var remaining = typeof el.textContent === 'string' ? el.textContent : '';
+  var thinks = el.querySelectorAll ? el.querySelectorAll('[data-variant="think"]') : [];
+  for (var i = 0; i < thinks.length; i++) {
+    var t = typeof thinks[i].textContent === 'string' ? thinks[i].textContent : '';
+    if (t && remaining.indexOf(t) !== -1) {
+      remaining = remaining.split(t).join('');
+    }
+  }
+  return remaining;
+}
+
+/**
+ * 纯思考步判定：assistant-step 流项里只有 think/reasoning 折叠行、无其他
+ * 可见内容。这类步骤对分组是"透明"的——工具调用之间仅隔纯思考步时仍并入
+ * 同组（thinking 不参与分组边界判断）；折叠组时随跨度一起收起，展示沿用
+ * 既有 reasoning 折叠行（展开态原样显示，无新增形态）。
+ * 文本步（think + 正文）不是纯思考步，仍是分组边界。
+ */
+function isThinkingOnlyNode(el) {
+  if (!el || !el.getAttribute) return false;
+  if (el.getAttribute('data-chat-flow-kind') !== 'assistant-step') return false;
+  if (!el.querySelector) return false;
+  var hasThink = false;
+  try { hasThink = !!el.querySelector('[data-variant="think"]'); } catch (e) { return false; }
+  if (!hasThink) return false;
+  return textOutsideThink(el).replace(/\s+/g, '').length === 0;
+}
+
+/**
  * Query all tool-call flow items in DOM order and split into consecutive groups.
  * Two tool-call items are "consecutive" if every element between them (within
  * the same parent) is a transparent node.
@@ -240,7 +277,7 @@ function areConsecutive(a, b) {
 
   var sibling = a.nextElementSibling;
   while (sibling && sibling !== b) {
-    if (!isTransparentNode(sibling) && !isTurnFoldHeader(sibling)) return false;
+    if (!isTransparentNode(sibling) && !isThinkingOnlyNode(sibling) && !isTurnFoldHeader(sibling)) return false;
     sibling = sibling.nextElementSibling;
   }
   return sibling === b;
@@ -317,12 +354,36 @@ function createHeader(group) {
 
 // ── Collapse / Expand ────────────────────────────────────────────────────
 
+// 组跨度内的纯思考步（从组头走到末成员——覆盖 header 与组首成员之间的
+// thinking）：随组标记缩进（复用成员的 data-dsao-tg-pos 20px 规则），折叠时
+// 一并收起、展开时恢复——展示沿用既有 reasoning 折叠行。
+function thinkingStepsInSpan(header, lastMember) {
+  var out = [];
+  if (!header || !lastMember) return out;
+  var node = header.nextElementSibling;
+  while (node && node !== lastMember) {
+    if (isThinkingOnlyNode(node)) out.push(node);
+    node = node.nextElementSibling;
+  }
+  return out;
+}
+
+function markSpanThinking(header, group, collapsed) {
+  var thinks = thinkingStepsInSpan(header, group[group.length - 1]);
+  for (var i = 0; i < thinks.length; i++) {
+    thinks[i].setAttribute('data-dsao-tg-pos', 'middle');
+    if (collapsed) thinks[i].setAttribute('data-dsao-tg-collapsed', '');
+    else thinks[i].removeAttribute('data-dsao-tg-collapsed');
+  }
+}
+
 function applyCollapse(header, group) {
   header.setAttribute('data-dsao-tg-state', 'collapsed');
   header.setAttribute('aria-expanded', 'false');
   for (var i = 0; i < group.length; i++) {
     group[i].setAttribute('data-dsao-tg-collapsed', '');
   }
+  markSpanThinking(header, group, true);
   var summary = header.querySelector('[data-dsao-tg-summary]');
   if (summary) summary.textContent = summaryText(group);
 }
@@ -333,6 +394,7 @@ function applyExpand(header, group) {
   for (var i = 0; i < group.length; i++) {
     group[i].removeAttribute('data-dsao-tg-collapsed');
   }
+  markSpanThinking(header, group, false);
 }
 
 function toggleGroup(header, group) {
@@ -363,7 +425,7 @@ function collectGroupFromHeader(header) {
   var items = [];
   var node = header.nextElementSibling;
   while (node) {
-    if (isTransparentNode(node) || isTurnFoldHeader(node)) { node = node.nextElementSibling; continue; }
+    if (isTransparentNode(node) || isThinkingOnlyNode(node) || isTurnFoldHeader(node)) { node = node.nextElementSibling; continue; }
     if (!node.getAttribute || node.getAttribute('data-chat-flow-kind') !== 'tool-call') break;
     if (!isGroupableTool(node)) break;
     items.push(node);
@@ -406,7 +468,8 @@ function applyGroup(group) {
   var existingHeader = first.previousElementSibling;
   while (existingHeader) {
     if (existingHeader.getAttribute && existingHeader.getAttribute('data-dsao-tg-header') !== null) break;
-    if (existingHeader.getAttribute && existingHeader.getAttribute('data-chat-flow-key') !== null) { existingHeader = null; break; }
+    if (existingHeader.getAttribute && existingHeader.getAttribute('data-chat-flow-key') !== null &&
+        !isThinkingOnlyNode(existingHeader)) { existingHeader = null; break; }
     existingHeader = existingHeader.previousElementSibling;
   }
   var headerExists = !!(existingHeader && existingHeader.getAttribute &&
@@ -476,6 +539,7 @@ function applyGroup(group) {
     var state = existingHeader.getAttribute('data-dsao-tg-state');
     if (state === 'collapsed') {
       for (var j = 0; j < group.length; j++) group[j].setAttribute('data-dsao-tg-collapsed', '');
+      markSpanThinking(existingHeader, group, true);
     }
   }
 }
@@ -548,8 +612,9 @@ var confirmTimer = null;  // follow-up scan timer (static-DOM guarantee)
 function manageLatestGroup(groups) {
   if (!groups || groups.length === 0) { pendingSignal = null; return; }
   var latestGroup = groups[groups.length - 1];
-  var first = latestGroup[0];
-  var header = first.previousElementSibling;
+  // 组头定位走跳过链（headerOfGroup）：头与组首之间可能隔着纯思考步，
+  // 直接取 previousElementSibling 会在该场景下丢头（自动展开/收起失效）。
+  var header = headerOfGroup(latestGroup);
   if (!header || !header.getAttribute ||
       header.getAttribute('data-dsao-tg-header') !== '') { pendingSignal = null; return; }
 
@@ -597,7 +662,7 @@ function manageLatestGroup(groups) {
 function nextSignificantSibling(el) {
   var sibling = el.nextElementSibling;
   while (sibling) {
-    if (isTransparentNode(sibling) || isTurnFoldHeader(sibling)) {
+    if (isTransparentNode(sibling) || isThinkingOnlyNode(sibling) || isTurnFoldHeader(sibling)) {
       sibling = sibling.nextElementSibling;
       continue;
     }
@@ -613,7 +678,7 @@ function nextSignificantSibling(el) {
 function prevSignificantSibling(el) {
   var sibling = el.previousElementSibling;
   while (sibling) {
-    if (isTransparentNode(sibling) || isTurnFoldHeader(sibling)) {
+    if (isTransparentNode(sibling) || isThinkingOnlyNode(sibling) || isTurnFoldHeader(sibling)) {
       sibling = sibling.previousElementSibling;
       continue;
     }
@@ -642,6 +707,17 @@ function cleanupStaleMarkers(root) {
     }
   }
 
+  // 纯思考步的组标记全清（pos+collapsed）：活组的 markSpanThinking 在本轮
+  // fullPipeline 后段重新标记（cleanup → detect → apply 顺序保证自愈），
+  // 解散组的孤儿不残留。
+  var collapsedThinks = root.querySelectorAll('[data-dsao-tg-collapsed]');
+  for (var ct = 0; ct < collapsedThinks.length; ct++) {
+    if (isThinkingOnlyNode(collapsedThinks[ct])) {
+      collapsedThinks[ct].removeAttribute('data-dsao-tg-collapsed');
+      collapsedThinks[ct].removeAttribute('data-dsao-tg-pos');
+    }
+  }
+
   var marked = root.querySelectorAll('[data-dsao-tg-pos]');
   for (var m = 0; m < marked.length; m++) {
     var el = marked[m];
@@ -654,7 +730,10 @@ function cleanupStaleMarkers(root) {
       // If we hit a non-tool-call significant node, the chain is broken
       if (prev.getAttribute && prev.getAttribute('data-chat-flow-kind') !== 'tool-call') break;
     }
-    if (!hasHeader) unmarkGroupItem(el);
+    if (!hasHeader) { unmarkGroupItem(el); continue; }
+    // 流项中途过渡（纯思考步长出正文 → 变回边界）：不保留组缩进
+    var kind = el.getAttribute ? el.getAttribute('data-chat-flow-kind') : null;
+    if (kind !== 'tool-call' && !isThinkingOnlyNode(el)) unmarkGroupItem(el);
   }
 }
 
@@ -712,7 +791,7 @@ var pending = null; // null | { full: bool, item: el|null }
 function prevGroupableTool(el) {
   var sibling = el.previousElementSibling;
   while (sibling) {
-    if (isTransparentNode(sibling) || isTurnFoldHeader(sibling)) { sibling = sibling.previousElementSibling; continue; }
+    if (isTransparentNode(sibling) || isThinkingOnlyNode(sibling) || isTurnFoldHeader(sibling)) { sibling = sibling.previousElementSibling; continue; }
     if (sibling.getAttribute &&
         sibling.getAttribute('data-chat-flow-kind') === 'tool-call' &&
         isGroupableTool(sibling)) return sibling;
@@ -779,7 +858,7 @@ function headerOfGroup(group) {
   var sibling = el.previousElementSibling;
   while (sibling) {
     if (sibling.getAttribute && sibling.getAttribute('data-dsao-tg-header') !== null) return sibling;
-    if (isTransparentNode(sibling)) { sibling = sibling.previousElementSibling; continue; }
+    if (isTransparentNode(sibling) || isThinkingOnlyNode(sibling)) { sibling = sibling.previousElementSibling; continue; }
     return null;
   }
   return null;
@@ -791,7 +870,7 @@ function syncOneHeader(header) {
   var member = header.nextElementSibling;
   while (member) {
     if (member.getAttribute && member.getAttribute('data-chat-flow-kind') === 'tool-call') break;
-    if (isTransparentNode(member)) { member = member.nextElementSibling; continue; }
+    if (isTransparentNode(member) || isThinkingOnlyNode(member)) { member = member.nextElementSibling; continue; }
     break;
   }
   if (!member) return;
@@ -1002,5 +1081,7 @@ exports.detectGroups = detectGroups;
 exports.isGroupableTool = isGroupableTool;
 exports.areConsecutive = areConsecutive;
 exports.isTransparentNode = isTransparentNode;
+exports.isThinkingOnlyNode = isThinkingOnlyNode;
+exports.textOutsideThink = textOutsideThink;
 exports.classifyMutations = classifyMutations;
 exports.scanStats = scanStats;

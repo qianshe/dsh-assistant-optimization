@@ -37,7 +37,7 @@ function loadMermaid() {
   if (_mermaidLoaded) return _mermaidLoaded;
   if (typeof window === "undefined" || !window.document) return Promise.resolve(null);
   if (window.mermaid) {
-    window.mermaid.initialize({ startOnLoad: false, theme: "default", securityLevel: "loose", flowchart: { useMaxWidth: false } });
+    window.mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "loose", flowchart: { useMaxWidth: false } });
     _mermaidLoaded = Promise.resolve(window.mermaid);
     return _mermaidLoaded;
   }
@@ -46,7 +46,7 @@ function loadMermaid() {
     s.src = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js";
     s.onload = function () {
       if (window.mermaid) {
-        window.mermaid.initialize({ startOnLoad: false, theme: "default", securityLevel: "loose", flowchart: { useMaxWidth: false } });
+        window.mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "loose", flowchart: { useMaxWidth: false } });
         resolve(window.mermaid);
       } else { _mermaidLoaded = null; resolve(null); }
     };
@@ -88,7 +88,7 @@ function _mountMermaid(el, svgHtml) {
   _ensureDragListeners();
   var container = document.createElement("div");
   container.className = "dsao-mermaid";
-  container.style.cssText = "position:relative;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;overflow:hidden;margin:8px auto;display:block;cursor:grab;user-select:none;box-sizing:border-box";
+  container.style.cssText = "position:relative;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;overflow:hidden;margin:8px auto;display:block;cursor:grab;user-select:none;box-sizing:border-box;background:var(--dsw-alias-markdown-code-block,#141420)";
 
   var toolbar = document.createElement("div");
   toolbar.style.cssText = "position:absolute;top:6px;right:6px;display:flex;gap:4px;z-index:10;background:var(--dsw-alias-bg-module-platform,rgba(255,255,255,0.92));border-radius:6px;padding:2px;box-shadow:0 1px 3px rgba(0,0,0,0.12)";
@@ -105,7 +105,7 @@ function _mountMermaid(el, svgHtml) {
   toolbar.appendChild(btnReset);
 
   var svgWrap = document.createElement("div");
-  svgWrap.style.cssText = "position:absolute;left:0;top:0;transform-origin:top left;display:block;padding:12px;box-sizing:border-box";
+  svgWrap.style.cssText = "position:absolute;left:0;top:0;transform-origin:top left;display:block;padding:12px;box-sizing:border-box;background:var(--dsw-alias-markdown-code-block,#141420)";
   svgWrap.innerHTML = svgHtml;
   // Pin the SVG to its natural size (from the viewBox); the fit below scales
   // the wrap via transform, never the SVG layout.

@@ -30,12 +30,112 @@
 // like ctx.get("slots") races the renderer and silently bails out. This is
 // the client-side twin of the host half's `inject = ['webServer']` fix.
 // settingsScope：接管官方 transcriptView（dsh 0.1.2+ 默认 compact 折叠）
-const inject = ['slots', 'settingsScope'];
+// sessions/uiConversation/conversation：会话数据注入的快照源（供给端，见下）
+const inject = ['slots', 'settingsScope', 'sessions', 'uiConversation', 'conversation'];
+
+// ── 会话数据注入（dsh 0.1.2+ 供给端）────────────────────────────────────
+// 槽位 props 不再携带会话（conversation 包全部 renderSlot 均为空 props），
+// 消费端（prompt-enhance / resume / turn-fold 三个挂载）已改为 Hook 型 props：
+// useSession/useInput/useChat/useSessions/useWorkspaces。
+// 供给走 renderer 的 entry inject：session-scoped 槽位的 inject(sessionId)
+// 收到会话 id，返回 face 里 hooks.{name} 源会被包装成 use{Name} 选择器 Hook
+// （useSyncExternalStoreWithSelector），源契约 = { getSnapshot, subscribe }。
+function createSessionInject(ctx) {
+  return function sessionInject(sessionId) {
+    var face = { sessionId: sessionId };
+    var hooks = {};
+    try {
+      // 聊天快照（形状兼容旧 session.chat：order/nodes/locations/timeline）
+      var chatTarget = ctx.uiConversation.binding(sessionId).target("chat");
+      hooks.chat = {
+        getSnapshot: function () { return chatTarget.getSnapshot(); },
+        subscribe: function (fn) { return chatTarget.subscribe(fn); }
+      };
+    } catch (e) { /* 会话未就绪：useChat 缺席，挂载端按 null 快照降级 */ }
+    try {
+      // 会话列表（byId 含 running/cwd/origin/current）——运行检测与上下文的数据源
+      hooks.sessions = {
+        getSnapshot: function () { return ctx.sessions.list.getSnapshot(); },
+        subscribe: function (fn) { return ctx.sessions.list.subscribe(fn); }
+      };
+    } catch (e) {}
+    try {
+      // 会话面：优先挂 binding.session 门面（快照带 queue，placement:'queued'
+      // 契约与旧版一致）；sessionId/running/subagent 按需补齐——running 来自
+      // list 行（canResume 的运行检测依赖它），subagent 来自行的 origin。
+      // 双订阅：门面与 list 任一变化都通知；组合快照按双身份缓存，保持
+      // getSnapshot 引用稳定（useSyncExternalStore 要求缓存）。
+      var binding = ctx.sessions.binding(sessionId);
+      var facade = binding && binding.session;
+      var listRef = hooks.sessions;
+      function subagentOf(row) {
+        return row && row.origin === "subagent"
+          ? (row.parentSessionId !== undefined ? row.parentSessionId : true)
+          : null;
+      }
+      if (facade && typeof facade.getSnapshot === "function") {
+        var lastRaw = null, lastList = null, lastComposed = null;
+        hooks.session = {
+          getSnapshot: function () {
+            var raw = facade.getSnapshot();
+            var list = ctx.sessions.list.getSnapshot();
+            if (raw !== lastRaw || list !== lastList) {
+              lastRaw = raw;
+              lastList = list;
+              var row = list && list.byId ? list.byId[sessionId] : null;
+              lastComposed = Object.assign({}, raw || {}, {
+                sessionId: raw && raw.sessionId !== undefined ? raw.sessionId : sessionId,
+                running: raw && raw.running !== undefined ? !!raw.running : !!(row && row.running),
+                subagent: raw && raw.subagent !== undefined ? raw.subagent : subagentOf(row)
+              });
+            }
+            return lastComposed;
+          },
+          subscribe: function (fn) {
+            var unsubs = [];
+            if (typeof facade.subscribe === "function") {
+              try { unsubs.push(facade.subscribe(fn)); } catch (e3) {}
+            }
+            try { unsubs.push(listRef.subscribe(fn)); } catch (e4) {}
+            return function () { for (var i = 0; i < unsubs.length; i++) { try { unsubs[i](); } catch (e5) {} } };
+          }
+        };
+      } else {
+        // 无门面：退化为 list 行合成
+        hooks.session = {
+          getSnapshot: function () {
+            var list = ctx.sessions.list.getSnapshot();
+            var row = list && list.byId ? list.byId[sessionId] : null;
+            return {
+              sessionId: sessionId,
+              running: !!(row && row.running),
+              subagent: subagentOf(row)
+            };
+          },
+          subscribe: function (fn) { return listRef.subscribe(fn); }
+        };
+      }
+    } catch (e) {}
+    try {
+      // 输入面（draft/phase）——composer 编辑投影
+      var inputState = ctx.conversation.input.for(ctx.sessions.scope(sessionId)).state;
+      hooks.input = {
+        getSnapshot: function () { return inputState.getSnapshot(); },
+        subscribe: function (fn) { return inputState.subscribe(fn); }
+      };
+    } catch (e) { /* 输入面未就绪：draft 视为空 */ }
+    // workspaces：服务侧无稳定快照源，不给 useWorkspaces——readContext 对
+    // null 容忍，仅项目名降级，增强请求其余上下文不受影响。
+    if (Object.keys(hooks).length > 0) face.hooks = hooks;
+    return face;
+  };
+}
 
 // The apply function below is what gets registered as the Cordis plugin:
 function apply(ctx) {
   var slots = ctx.slots;
   if (slots === undefined) return;
+  var sessionInject = createSessionInject(ctx);
 
   // ── 屏蔽官方 turn 折叠（dsh 0.1.2+）───────────────────────────
   // 官方在 transcriptView==="compact" 时折叠过程成员（hidden="until-found"），
@@ -66,7 +166,7 @@ function apply(ctx) {
   // 1b. Wrap official tool-call *view* (write/edit) at the leaf-level
   //     tool.call.toolview slot to add file-edit diff badges. Leaf-tier
   //     shadow: does NOT declare children so it never 需要 renderSlot.
-  var diffKeys = ['write', 'edit'];
+  var diffKeys = []; // v1.8.0: official ToolRow renders native write/edit diff stats
   for (var di = 0; di < diffKeys.length; di++) {
     (function (key) {
       slots.inject("tool.call.toolview", function () {
@@ -110,7 +210,7 @@ function apply(ctx) {
   //    the send button, since no slot exists at that exact position.
   slots.inject("conversation.input.right", function () {
     return slots.register(
-      { name: "conversation.input.right", id: "dsao-prompt-enhance", order: 100, locale: "conversation" },
+      { name: "conversation.input.right", id: "dsao-prompt-enhance", order: 100, locale: "conversation", inject: sessionInject },
       PromptEnhanceMount
     );
   });
@@ -119,7 +219,7 @@ function apply(ctx) {
   //     点击调用 /api/dsao/resume 免输入唤醒（PRD §14 Phase 2）。
   slots.inject("conversation.input.right", function () {
     return slots.register(
-      { name: "conversation.input.right", id: "dsao-resume", order: 101, locale: "conversation" },
+      { name: "conversation.input.right", id: "dsao-resume", order: 101, locale: "conversation", inject: sessionInject },
       ResumeMount
     );
   });
@@ -148,7 +248,7 @@ function apply(ctx) {
   //     经 DI 传入——缺省参数下行为退化为纯 tf 同步（测试环境用）。
   slots.inject("conversation.input.right", function () {
     return slots.register(
-      { name: "conversation.input.right", id: "dsao-turn-fold", order: 110, locale: "conversation" },
+      { name: "conversation.input.right", id: "dsao-turn-fold", order: 110, locale: "conversation", inject: sessionInject },
       createTurnFold(React, resetToolGroups, scanToolGroups).TurnFoldMount
     );
   });
@@ -162,6 +262,10 @@ function apply(ctx) {
   // 6. 断点续发行折叠：DOM 层后备，把官方渲染的空 marker 气泡替换为
   //    「已从中断处继续」提示行（slot 遮蔽未生效时的双保险）。
   ctx.effect(function () { return resumeContinuity.startResumeHintObserver(); });
+
+  // 7. 模型选择器收窄适配：标记模型选择按钮（aria-haspopup + title 含 "·"），
+  //    CSS 容器查询在窄宽度下隐藏文字（同权限按钮行为）。
+  ctx.effect(function () { return startModelSelectorCompact(); });
 
   // 卸载时移除官方折叠同步监听
   ctx.effect(function () {

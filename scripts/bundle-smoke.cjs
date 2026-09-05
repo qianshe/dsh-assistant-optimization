@@ -69,10 +69,29 @@ const slots = {
   register: (opts, comp) => { const e = { options: opts, component: comp }; slotEntries.push(e); return e; },
   inject: (name, factory) => injectFactories.push([name, factory]),
 };
-main.apply({
-  get: (k) => (k === 'slots' ? slots : undefined),
+// 会话数据注入的 fake 服务（v1.8.0 供给端契约）：
+// chat 快照源 + 会话列表 + 输入面，形状对齐 dsh 0.1.2 真实服务。
+const chatSnap = { order: [], nodes: { get: () => undefined }, locations: { getTurn: () => [] }, timeline: { turns: new Map() } };
+const chatSubs = new Set();
+const chatTarget = {
+  getSnapshot: () => chatSnap,
+  subscribe: (fn) => { chatSubs.add(fn); return () => chatSubs.delete(fn); },
+};
+const listSnap = { ids: ['sess-1'], byId: { 'sess-1': { cwd: '/repo', origin: 'user' } }, current: 'sess-1', phase: 'ready' };
+const listSubs = new Set();
+const fakeCtx = {
+  slots,
+  settingsScope: { bind: () => ({ set() {} }) },
+  sessions: {
+    list: { getSnapshot: () => listSnap, subscribe: (fn) => { listSubs.add(fn); return () => listSubs.delete(fn); } },
+    binding: (id) => ({ key: id, sessionId: id, session: {} }),
+    scope: (id) => ({ id }),
+  },
+  uiConversation: { binding: () => ({ target: (name) => { if (name !== 'chat') throw new Error('unknown target ' + name); return chatTarget; } }) },
+  conversation: { input: { for: () => ({ state: { getSnapshot: () => ({ draft: '' }), subscribe: () => () => {} } }) } },
   effect: (fn) => effects.push(fn),
-});
+};
+main.apply(fakeCtx);
 for (const [name, factory] of injectFactories) {
   try {
     factory();
@@ -80,12 +99,36 @@ for (const [name, factory] of injectFactories) {
     fail(`inject 工厂抛错（${name}）: ${e.message}`);
   }
 }
+if (slotEntries.length === 0) fail('apply 未注册任何 entry（ctx.slots 供给缺失 → 假绿）');
 const effectsOk = effects.every((fn) => { try { fn(); return true; } catch (e) { fail(`effect 抛错: ${e.message}`); return false; } });
 const bad = slotEntries.filter((e) => typeof e.component !== 'function');
 if (bad.length > 0) {
   for (const e of bad) fail(`entry 组件为 ${typeof e.component}（key=${e.options.key} id=${e.options.id}）→ React #130 源头`);
 } else {
   ok(`注册链完好：inject 工厂 ${injectFactories.length} 个，entry ${slotEntries.length} 个，组件全部为函数，effect ${effects.length} 个${effectsOk ? ' 全部可执行' : ''}`);
+}
+
+// 2a-1) 供给端契约：input.right 三个挂载 entry 必须声明 inject，且 face 携带
+// sessionId + 会话 Hook 源（renderer 将 hooks.{name} 包装成 use{Name}）。
+{
+  const mounts = slotEntries.filter((e) => e.options.name === 'conversation.input.right');
+  if (mounts.length < 3) fail(`input.right 挂载 entry=${mounts.length}（应 ≥3）`);
+  for (const e of mounts) {
+    if (typeof e.options.inject !== 'function') { fail(`entry ${e.options.id} 缺 inject 声明`); continue; }
+    const face = e.options.inject('sess-1');
+    if (face.sessionId !== 'sess-1') fail(`entry ${e.options.id} inject 未回传 sessionId`);
+    const hooks = face.hooks || {};
+    for (const name of ['chat', 'session', 'input', 'sessions']) {
+      const src = hooks[name];
+      if (!src || typeof src.getSnapshot !== 'function' || typeof src.subscribe !== 'function') {
+        fail(`entry ${e.options.id} 缺 hooks.${name} 源（{getSnapshot, subscribe}）`);
+      }
+    }
+    if (typeof hooks.chat.getSnapshot() !== 'object' || hooks.chat.getSnapshot() !== chatSnap) {
+      fail(`entry ${e.options.id} chat 源未返回快照`);
+    }
+  }
+  if (failures === 0) ok(`供给端契约：${mounts.length} 个挂载 inject 返回 sessionId + chat/session/input/sessions 源`);
 }
 
 // 2b) 浅渲染探针：entry 组件可能是包装函数（本身是函数但内部 createElement(undefined)，

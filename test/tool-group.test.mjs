@@ -62,6 +62,29 @@ function summaryOf(col) {
   return s ? s.textContent : null
 }
 
+
+function makeThinkOnly() {
+  const item = new StubElement('div')
+  item.setAttribute('data-chat-flow-key', 'k' + (keySeq++))
+  item.setAttribute('data-chat-flow-kind', 'assistant-step')
+  item.textContent = '' // 自身无文本；只有 think 折叠行
+  const think = item.appendChild(new StubElement('div'))
+  think.setAttribute('data-variant', 'think')
+  think.textContent = 'Think · reasoning preview' // think 行自身有文本（不计入判定）
+  return item
+}
+
+function makeStepWithText() {
+  const item = new StubElement('div')
+  item.setAttribute('data-chat-flow-key', 'k' + (keySeq++))
+  item.setAttribute('data-chat-flow-kind', 'assistant-step')
+  item.textContent = '先看结果，再继续下一步' // think + 正文 → 不是纯思考步（仍是边界）
+  const think = item.appendChild(new StubElement('div'))
+  think.setAttribute('data-variant', 'think')
+  think.textContent = 'Think · …'
+  return item
+}
+
 let passed = 0
 function ok(cond, msg) {
   assert.ok(cond, msg)
@@ -329,6 +352,165 @@ function ok(cond, msg) {
   ok(headerOf(col).getAttribute('data-dsao-tg-size') === '4', 'acc2: all four grouped')
   ok(tg.scanStats.full === 2, 'acc2: full scan (two tail adds in one window)')
   ok(tg.scanStats.tail === 0, 'acc2: no tail scan')
+}
+
+
+// ── 13. 工具调用之间仅隔纯思考步 → 合并为同一组（核心新行为）──────────────
+{
+  const tg = freshModule()
+  const col = makeColumn()
+  col.appendChild(makeToolCall('read').item)
+  col.appendChild(makeThinkOnly())
+  col.appendChild(makeToolCall('grep').item)
+
+  tg.startToolGroupObserver()
+
+  const h = headerOf(col)
+  ok(h, 'think-between: header created')
+  ok(h.getAttribute('data-dsao-tg-size') === '2', 'think-between: size 2（思考不计入工具数）')
+  ok(summaryOf(col) === 'read、grep · 2 个工具', 'think-between: summary')
+  ok(h.getAttribute('data-dsao-tg-state') === 'collapsed', 'think-between: collapsed by default')
+  const thinkEl = col.querySelector('[data-chat-flow-kind="assistant-step"]')
+  ok(thinkEl && thinkEl.hasAttribute('data-dsao-tg-collapsed'), 'think-between: 折叠跨度收起思考行')
+  ok(thinkEl && thinkEl.hasAttribute('data-dsao-tg-pos'), 'think-between: 思考行带组缩进标记')
+}
+
+// ── 13b. 尾部增量路径：think 之后的工具仍并入（tail scan 跨思考步回走）────
+{
+  const tg = freshModule()
+  const col = makeColumn()
+  col.appendChild(makeToolCall('read').item)
+  col.appendChild(makeThinkOnly())
+  tg.startToolGroupObserver()
+  assert.equal(headerOf(col), null, 'tail-think: 单工具无组')
+
+  col.appendChild(makeToolCall('grep').item)
+  await tick()
+
+  const h = headerOf(col)
+  ok(h && h.getAttribute('data-dsao-tg-size') === '2', 'tail-think: 跨思考步并入同组')
+  ok(tg.scanStats.tail === 1, 'tail-think: 走 tail 增量（未触发全扫）')
+}
+
+// ── 14. 边界保留：think+正文 组合步、纯文本步仍打断分组 ────────────────────
+{
+  const tg = freshModule()
+  const col = makeColumn()
+  col.appendChild(makeToolCall('read').item)
+  col.appendChild(makeStepWithText()) // think + 正文 → 非纯思考步
+  col.appendChild(makeToolCall('grep').item)
+  tg.startToolGroupObserver()
+  ok(headerOf(col) === null, 'boundary: think+正文 步仍是分组边界')
+
+  // 旧行为回归：assistant-text 类（makeText 同型）仍边界
+  const col2 = makeColumn()
+  col2.appendChild(makeToolCall('read').item)
+  col2.appendChild(makeText())
+  col2.appendChild(makeToolCall('grep').item)
+  tg.startToolGroupObserver() // 复用同模块二次扫描（幂等）
+  ok(headerOf(col) === null && headerOf(col2) === null, 'boundary: assistant-text 仍是边界（现状保持）')
+}
+
+// ── 15. 纯思考步在尾部不触发收起（无越组渲染信号）─────────────────────────
+{
+  const tg = freshModule()
+  const col = makeColumn()
+  const a = makeToolCall('read')
+  const b = makeToolCall('grep')
+  col.appendChild(a.item)
+  col.appendChild(b.item)
+  const status = new StubElement('div')
+  status.className = 'abc_turnStatus'
+  col.appendChild(status)
+  tg.startToolGroupObserver()
+  assert.equal(headerOf(col).getAttribute('data-dsao-tg-state'), 'expanded')
+
+  col.appendChild(makeThinkOnly()) // 只有思考行到达
+  await tick()
+
+  ok(headerOf(col).getAttribute('data-dsao-tg-state') === 'expanded', 'think-tail: 不误判为越组内容')
+
+  col.appendChild(makeStepWithText()) // 真正的正文到达 → 收起
+  await tick()
+  ok(headerOf(col).getAttribute('data-dsao-tg-state') === 'collapsed', 'think-tail: 正文到达照常收起')
+}
+
+// ── 16. 组解散后思考行的孤儿折叠标记被清理 ────────────────────────────────
+{
+  const tg = freshModule()
+  const col = makeColumn()
+  const a = makeToolCall('read').item
+  const think = makeThinkOnly()
+  const b = makeToolCall('grep').item
+  col.appendChild(a)
+  col.appendChild(think)
+  col.appendChild(b)
+  tg.startToolGroupObserver()
+  ok(think.hasAttribute('data-dsao-tg-collapsed'), 'cleanup: 组折叠时思考行随跨度收起')
+
+  col.removeChild(b) // 组解散（剩 1 个成员；stub 无 Element.remove）
+  await tick()
+
+  ok(headerOf(col) === null, 'cleanup: 头已拆')
+  ok(!think.hasAttribute('data-dsao-tg-collapsed'), 'cleanup: 思考行孤儿标记已清')
+}
+
+// ── 13c. 深层嵌套思考行（真实 DOM：flowItem>root>body>ProcessReasoning>Row）──
+// textContent 按聚合模型模拟（父含 think 子树文本），守护 textOutsideThink 的
+// 深度无关扣除——旧实现只扣直接子级，此用例会失败。
+{
+  const tg = freshModule()
+  const col = makeColumn()
+  col.appendChild(makeToolCall('read').item)
+  const step = new StubElement('div')
+  step.setAttribute('data-chat-flow-key', 'k' + (keySeq++))
+  step.setAttribute('data-chat-flow-kind', 'assistant-step')
+  // 聚合模型：step 的 textContent 含 think 行全文（真实 DOM 行为）
+  const THINK_TEXT = 'Think\u00B7The user wants merging'
+  step.textContent = THINK_TEXT
+  const mdRoot = step.appendChild(new StubElement('div'))
+  const body = mdRoot.appendChild(new StubElement('div'))
+  const inline = body.appendChild(new StubElement('div'))
+  inline.setAttribute('data-turn-process-inline', '')
+  const think = inline.appendChild(new StubElement('div'))
+  think.setAttribute('data-variant', 'think')
+  think.textContent = THINK_TEXT
+  col.appendChild(step)
+  col.appendChild(makeToolCall('grep').item)
+
+  tg.startToolGroupObserver()
+
+  const h = headerOf(col)
+  ok(h && h.getAttribute('data-dsao-tg-size') === '2', 'nested-think: 跨深层思考行合并为同组')
+}
+
+// ── 17. 组缩进：header 与组首之间的思考行入跨度；运行展开态有缩进无折叠 ──
+{
+  const tg = freshModule()
+  const col = makeColumn()
+  const a = makeToolCall('read').item
+  const b = makeToolCall('grep').item
+  col.appendChild(a)
+  col.appendChild(b)
+  tg.startToolGroupObserver()
+  const h = headerOf(col)
+  ok(h, 'indent: 组已建')
+
+  // think 插在组头与组首成员之间（流式 reasoning 先于首工具重排的现实场景）
+  const think = makeThinkOnly()
+  col.insertBefore(think, a)
+  await tick()
+
+  ok(think.hasAttribute('data-dsao-tg-pos'), 'indent: 头后思考行入跨度带缩进')
+  ok(think.hasAttribute('data-dsao-tg-collapsed'), 'indent: 折叠态随组收起')
+
+  // 运行展开：grep 转为 running → 组展开 → 思考行保留缩进、解除折叠
+  const grepRow = b.querySelector('[data-tool]')
+  grepRow.setAttribute('data-state', 'running')
+  await tick()
+  ok(headerOf(col).getAttribute('data-dsao-tg-state') === 'expanded', 'indent: 运行展开')
+  ok(think.hasAttribute('data-dsao-tg-pos'), 'indent: 展开态思考行仍缩进')
+  ok(!think.hasAttribute('data-dsao-tg-collapsed'), 'indent: 展开态思考行可见')
 }
 
 console.log(`tool-group: ${passed} assertions passed`)

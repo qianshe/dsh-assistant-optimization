@@ -140,8 +140,8 @@ function makeButton() {
   }
   const before = renderCalls.length
   promptEnhance.PromptEnhanceMount({
-    session: subagentSession,
-    input: { draft: '继续', phase: 'plain' },
+    useSession: () => subagentSession,
+    useInput: () => ({ draft: '继续', phase: 'plain' }),
     inputActions: { setDraft: () => {} },
   })
   assert.equal(renderCalls.length, before, 'subagent composer must not render the anchor span')
@@ -152,8 +152,9 @@ function makeButton() {
   const normalSession = { sessionId: 's-1', subagent: null }
   const before = renderCalls.length
   const el = promptEnhance.PromptEnhanceMount({
-    session: normalSession,
-    input: { draft: '继续', phase: 'plain' },
+    useSession: () => normalSession,
+    useInput: () => ({ draft: '继续', phase: 'plain' }),
+    useChat: () => ({ legacy: { nodes: [] } }),
     inputActions: { setDraft: () => {} },
   })
   assert.equal(renderCalls.length, before + 1, 'normal composer must render the hidden anchor')

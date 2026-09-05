@@ -58,20 +58,23 @@ function agentStub({
   hasPending = false,
   lastReason = { kind: 'aborted' },
   events = undefined,
+  eventList = undefined,
 } = {}) {
   const submitted = []
   const turnEnd = { type: 'turn/end', seq: 99, data: { turn: 7, reason: lastReason } }
+  const eventArray = events ?? [
+    { type: 'turn/start', seq: 10, data: { turn: 7 } },
+    { type: 'user/message', seq: 11, data: { role: 'user', content: [{ type: 'text', text: 'do it' }], source: { kind: 'user' } } },
+    ...(lastReason === null ? [] : [turnEnd]),
+  ]
   return {
     submitted,
     status,
     inbox: { hasPending },
-    session: {
-      events: events ?? [
-        { type: 'turn/start', seq: 10, data: { turn: 7 } },
-        { type: 'user/message', seq: 11, data: { role: 'user', content: [{ type: 'text', text: 'do it' }], source: { kind: 'user' } } },
-        ...(lastReason === null ? [] : [turnEnd]),
-      ],
-    },
+    session: eventList
+      // dsh 0.1.2 Session 形态：无 .events 数组，事件流经 snapshotEvents() 读取。
+      ? { snapshotEvents: () => eventList }
+      : { events: eventArray },
     followup(message) { submitted.push(message) },
   }
 }
@@ -156,6 +159,21 @@ const base = { agents: undefined }
   assert.equal(out.status, 409)
   assert.equal(out.body.code, 'agent-busy')
   assert.equal(agent.submitted.length, 0)
+}
+
+// 8b. dsh 0.1.2 Session 形态：事件流经 snapshotEvents() 暴露（无 .events 数组），
+//     gate 必须走新读取路径——aborted 终态照样点亮续发。
+{
+  const agent = agentStub({ lastReason: { kind: 'aborted' }, eventList: [
+    { type: 'turn/start', seq: 10, data: { turn: 7 } },
+    { type: 'turn/end', seq: 99, data: { turn: 7, reason: { kind: 'aborted' } } },
+  ] })
+  const agents = new Map([['s1', agent]])
+  const out = await call(mount({ agents }).get(RESUME_PATH), { body: { sessionId: 's1' } })
+  assert.equal(out.status, 200)
+  assert.equal(out.body.accepted, true)
+  assert.equal(out.body.terminalKind, 'aborted')
+  assert.equal(agent.submitted.length, 1)
 }
 
 // 9. Happy path (default zero marker): followup receives exactly one user-role

@@ -93,9 +93,10 @@ function isResumeMarker(node) {
 function startResumeHintObserver() {
   if (typeof document === 'undefined') return function () {}
 
-  var ROW_SEL = '.gdEzaW_userRow'
-  var BUBBLE_SEL = '.gdEzaW_bubble'
-  var STACK_SEL = '.gdEzaW_userStack'
+  // dsh 0.1.2：CSS-module 哈希已换（Sixlwa_*），改用子串匹配避免锁死哈希。
+  var ROW_SEL = '[class*="userRow"]'
+  var BUBBLE_SEL = '[class*="bubble"]'
+  var STACK_SEL = '[class*="userStack"]'
 
   function processRow(row) {
     if (!row || row.hasAttribute('data-dsao-resume-collapsed')) return
