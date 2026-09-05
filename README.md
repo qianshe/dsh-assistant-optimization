@@ -116,10 +116,11 @@ node test/content-embed.test.mjs
 node test/turn-fold-sync.test.mjs
 node scripts/repro-switch-back.cjs
 node scripts/lib-sync-check.cjs
+node scripts/build-client.cjs verify
 node --check lib/client.js
 ```
 
-Tests load shipped modules from `lib/client.js` / `lib/index.js`. For slot keys, priorities, the reference-extraction contract, the failure-status map, and the full file structure, see [`docs/technical-reference.md`](./docs/technical-reference.md).
+Tests load shipped modules from `lib/client.js` / `lib/index.js`. `lib/client.js` is a build artifact: edit `src/` and regenerate with `node scripts/build-client.cjs build` — never edit by hand. For slot keys, priorities, the reference-extraction contract, the failure-status map, and the full file structure, see [`docs/technical-reference.md`](./docs/technical-reference.md).
 
 ## License
 

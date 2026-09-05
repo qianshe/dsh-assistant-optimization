@@ -1024,10 +1024,6 @@ window.__ModuleLoader__.load({
 				// now "content after" the last group → re-evaluate that group.
 				if (lastLatest && lastLatest.length) manageLatestGroup([lastLatest]);
 			}
-			// 官方折叠同步在增量路径也要生效：turn 结束时 turn-tail/错误行以
-			// tail add 到达、官方同时翻转成员 hidden——只靠全扫会让组头的
-			// 跟随隐藏滞后（真实时序里下一次全扫可能很久不来）。
-			syncHeadersToTurnFolds(null);
 			scanStats.tail++;
 		}
 

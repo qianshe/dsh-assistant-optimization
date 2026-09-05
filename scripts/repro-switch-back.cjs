@@ -103,7 +103,7 @@ function renderItems(column, session) {
 
 // ── 断言 ────────────────────────────────────────────────────────────────────
 let failures = 0;
-function assertConverged(label, column, plan) {
+function assertConverged(label, column, plan, opts = {}) {
   const problems = [];
   const tgHeaders = [...column.querySelectorAll('[data-dsao-tg-header]')];
   const toolCalls = [...column.querySelectorAll('[data-chat-flow-kind="tool-call"]')];
@@ -130,6 +130,10 @@ function assertConverged(label, column, plan) {
     if (byTurn[f.turn] !== 1) problems.push(`turn ${f.turn} tf-header 数量=${byTurn[f.turn] || 0}`);
   });
 
+  if (problems.length && opts.allowDiverge) {
+    console.log(`· [${label}] 发散（对照场景，允许）：` + problems.length + ' 项');
+    return;
+  }
   if (problems.length) {
     failures++;
     console.log(`✗ [${label}] 发散：\n  - ` + problems.join('\n  - '));
@@ -209,13 +213,16 @@ tg.scanToolGroups(doc.body);
 tf.applyPlanToColumn(column, planA(), {});
 assertConverged('switch-back O3', column, planA());
 
-// O4: 只跑 tg 不补 tf（模拟 tf 重同步丢失 —— 预期发散，作为对照）
-console.log('· O4: tg → tf → tg（无补充 tf，对照预期发散）');
+// O4: 只跑 tg 不补 tf（对照场景，不断言）。列上叠着前三轮泄漏的注入头，
+// cleanup 在脏列上拆头重建（新头无 tf-hidden、tf 又不补同步）——发散正是
+// 本场景要演示的形态：没有 tf 补同步时状态不收敛。真实运行中 converge/sweep
+// 保证 tg 扫描后总有 tf 补同步（O1-O3 验证收敛）。
+console.log('· O4: tg → tf → tg（无补充 tf，对照场景：允许发散）');
 renderItems(column, sessionA);
 tg.scanToolGroups(doc.body);
 tf.applyPlanToColumn(column, planA(), {});
 tg.scanToolGroups(doc.body);
-assertConverged('switch-back O4 (对照)', column, planA());
+assertConverged('switch-back O4 (对照，发散可接受)', column, planA(), { allowDiverge: true });
 
 // 场景 4：key 再生成变体 —— 切回 A 时 DOM 键与会话键不一致（模拟应用层重建会话状态）
 console.log('── 场景 4：切回时 DOM 键 ≠ 会话键（应用层键再生成）──');

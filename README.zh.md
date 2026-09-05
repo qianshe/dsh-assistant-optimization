@@ -116,10 +116,11 @@ node test/content-embed.test.mjs
 node test/turn-fold-sync.test.mjs
 node scripts/repro-switch-back.cjs
 node scripts/lib-sync-check.cjs
+node scripts/build-client.cjs verify
 node --check lib/client.js
 ```
 
-测试从 `lib/client.js` / `lib/index.js` 取出真实模块。slot key、优先级、参考提取契约、失败状态码映射与完整文件结构见 [`docs/technical-reference.md`](./docs/technical-reference.md)。
+测试从 `lib/client.js` / `lib/index.js` 取出真实模块。 `lib/client.js` 是构建产物：改 `src/` 后运行 `node scripts/build-client.cjs build` 重新生成，不要手改。slot key、优先级、参考提取契约、失败状态码映射与完整文件结构见 [`docs/technical-reference.md`](./docs/technical-reference.md)。
 
 ## 许可证
 

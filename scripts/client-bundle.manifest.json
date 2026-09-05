@@ -1,0 +1,334 @@
+{
+  "order": [
+    "dsao/markers",
+    "dsao/text-split",
+    "dsao/tool-diff",
+    "dsao/tool-group",
+    "dsao/wrapper",
+    "dsao/mermaid",
+    "dsao/settings",
+    "dsao/context",
+    "dsao/prompt-enhance",
+    "dsao/resume-gate",
+    "dsao/resume-button",
+    "dsao/resume-continuity",
+    "dsao/turn-fold",
+    "dsao/model-compact",
+    "dsh-assistant-optimization"
+  ],
+  "fileHeader": [
+    "// dsh-assistant-optimization — Client bundle",
+    "//",
+    "// Uses window.__ModuleLoader__.load() multi-registration to split concerns:",
+    "//   dsao/markers    — localStorage marker management",
+    "//   dsao/text-split — text splitting logic",
+    "//   dsao/tool-diff  — file-tool diff line count badges",
+    "//   dsao/tool-group — consecutive tool-call grouping + collapse",
+    "//   dsao/wrapper    — assistant-step + tool-call wrappers",
+    "//   dsao/mermaid    — mermaid DOM observer + SVG rendering",
+    "//   dsao/resume-gate — ▶ 门控纯函数（FR-1 谓词）",
+    "//   dsao/resume-continuity — 续跑 marker 行的呈现（空泡→继续提示）",
+    "//   dsao/turn-fold — 已完成 turn 过程折叠（一行「已完成 · 时长」+ 总结回复）",
+    "//   dsao/settings   — settings page UI",
+    "//   dsh-assistant-optimization — main plugin entry (requires the above)"
+  ],
+  "headers": {
+    "dsao/markers": "// ── dsao/markers ─────────────────────────────────────────────────────────",
+    "dsao/text-split": "// ── dsao/text-split ──────────────────────────────────────────────────────",
+    "dsao/tool-diff": "// ── dsao/tool-diff ────────────────────────────────────────────────────────",
+    "dsao/tool-group": "// ── dsao/tool-group ──────────────────────────────────────────────────────",
+    "dsao/wrapper": "// ── dsao/wrapper ─────────────────────────────────────────────────────────",
+    "dsao/mermaid": "// ── dsao/mermaid ─────────────────────────────────────────────────────────",
+    "dsao/settings": "// ── dsao/settings ────────────────────────────────────────────────────────",
+    "dsao/context": "// ── dsao/context ─────────────────────────────────────────────────────────",
+    "dsao/prompt-enhance": "// ── dsao/prompt-enhance ──────────────────────────────────────────────────",
+    "dsao/resume-gate": "// ── dsao/resume-gate ─────────────────────────────────────────────────────",
+    "dsao/resume-button": "// ── dsao/resume-button（CSS 叠加：隐藏官方 icon + 显示 ▶） ────────────────",
+    "dsao/resume-continuity": "// ── dsao/resume-continuity ───────────────────────────────────────────────",
+    "dsao/turn-fold": "// ── dsao/turn-fold（turn 过程折叠：「运行中 · 计时」行 + 「已完成 · 时长」折叠头 + 总结回复） ──",
+    "dsao/model-compact": "// ── dsao/model-compact ────────────────────────────────────────────────────",
+    "dsh-assistant-optimization": "// ── dsh-assistant-optimization (main entry) ──────────────────────────────"
+  },
+  "blocks": {
+    "dsao/markers": {
+      "head": [
+        "// ── dsao/markers ─────────────────────────────────────────────────────────",
+        "window.__ModuleLoader__.load({",
+        "\tid: \"dsao/markers\",",
+        "\tfactory: function (require) {",
+        "\t\tvar module = { exports: {} };",
+        "\t\tvar exports = module.exports;",
+        "\t\tObject.defineProperty(exports, Symbol.toStringTag, { value: \"Module\" });"
+      ],
+      "tail": [
+        "\t\treturn module.exports;",
+        "\t}",
+        "});"
+      ],
+      "blankLines": [],
+      "blanksBefore": 1
+    },
+    "dsao/text-split": {
+      "head": [
+        "// ── dsao/text-split ──────────────────────────────────────────────────────",
+        "window.__ModuleLoader__.load({",
+        "\tid: \"dsao/text-split\",",
+        "\tfactory: function (require) {",
+        "\t\tvar module = { exports: {} };",
+        "\t\tvar exports = module.exports;",
+        "\t\tObject.defineProperty(exports, Symbol.toStringTag, { value: \"Module\" });"
+      ],
+      "tail": [
+        "\t\treturn module.exports;",
+        "\t}",
+        "});"
+      ],
+      "blankLines": [],
+      "blanksBefore": 1
+    },
+    "dsao/tool-diff": {
+      "head": [
+        "// ── dsao/tool-diff ────────────────────────────────────────────────────────",
+        "window.__ModuleLoader__.load({",
+        "\tid: \"dsao/tool-diff\",",
+        "\tfactory: function (require) {",
+        "\t\tvar module = { exports: {} };",
+        "\t\tvar exports = module.exports;",
+        "\t\tObject.defineProperty(exports, Symbol.toStringTag, { value: \"Module\" });"
+      ],
+      "tail": [
+        "\t\treturn module.exports;",
+        "\t}",
+        "});"
+      ],
+      "blankLines": [],
+      "blanksBefore": 1
+    },
+    "dsao/tool-group": {
+      "head": [
+        "// ── dsao/tool-group ──────────────────────────────────────────────────────",
+        "window.__ModuleLoader__.load({",
+        "\tid: \"dsao/tool-group\",",
+        "\tfactory: function (require) {",
+        "\t\tvar module = { exports: {} };",
+        "\t\tvar exports = module.exports;",
+        "\t\tObject.defineProperty(exports, Symbol.toStringTag, { value: \"Module\" });"
+      ],
+      "tail": [
+        "\t\treturn module.exports;",
+        "\t}",
+        "});"
+      ],
+      "blankLines": [],
+      "blanksBefore": 1
+    },
+    "dsao/wrapper": {
+      "head": [
+        "// ── dsao/wrapper ─────────────────────────────────────────────────────────",
+        "window.__ModuleLoader__.load({",
+        "\tid: \"dsao/wrapper\",",
+        "\tfactory: function (require) {",
+        "\t\tvar module = { exports: {} };",
+        "\t\tvar exports = module.exports;",
+        "\t\tObject.defineProperty(exports, Symbol.toStringTag, { value: \"Module\" });"
+      ],
+      "tail": [
+        "\t\treturn module.exports;",
+        "\t}",
+        "});"
+      ],
+      "blankLines": [],
+      "blanksBefore": 1
+    },
+    "dsao/mermaid": {
+      "head": [
+        "// ── dsao/mermaid ─────────────────────────────────────────────────────────",
+        "window.__ModuleLoader__.load({",
+        "\tid: \"dsao/mermaid\",",
+        "\tfactory: function (require) {",
+        "\t\tvar module = { exports: {} };",
+        "\t\tvar exports = module.exports;",
+        "\t\tObject.defineProperty(exports, Symbol.toStringTag, { value: \"Module\" });"
+      ],
+      "tail": [
+        "\t\treturn module.exports;",
+        "\t}",
+        "});"
+      ],
+      "blankLines": [],
+      "blanksBefore": 1
+    },
+    "dsao/settings": {
+      "head": [
+        "// ── dsao/settings ────────────────────────────────────────────────────────",
+        "window.__ModuleLoader__.load({",
+        "\tid: \"dsao/settings\",",
+        "\tfactory: function (require) {",
+        "\t\tvar module = { exports: {} };",
+        "\t\tvar exports = module.exports;",
+        "\t\tObject.defineProperty(exports, Symbol.toStringTag, { value: \"Module\" });"
+      ],
+      "tail": [
+        "\t\treturn module.exports;",
+        "\t}",
+        "});"
+      ],
+      "blankLines": [
+        ""
+      ],
+      "blanksBefore": 1
+    },
+    "dsao/context": {
+      "head": [
+        "// ── dsao/context ─────────────────────────────────────────────────────────",
+        "window.__ModuleLoader__.load({",
+        "\tid: \"dsao/context\",",
+        "\tfactory: function (require) {",
+        "\t\tvar module = { exports: {} };",
+        "\t\tvar exports = module.exports;",
+        "\t\tObject.defineProperty(exports, Symbol.toStringTag, { value: \"Module\" });"
+      ],
+      "tail": [
+        "\t\treturn module.exports;",
+        "\t}",
+        "});"
+      ],
+      "blankLines": [],
+      "blanksBefore": 1
+    },
+    "dsao/prompt-enhance": {
+      "head": [
+        "// ── dsao/prompt-enhance ──────────────────────────────────────────────────",
+        "window.__ModuleLoader__.load({",
+        "\tid: \"dsao/prompt-enhance\",",
+        "\tfactory: function (require) {",
+        "\t\tvar module = { exports: {} };",
+        "\t\tvar exports = module.exports;",
+        "\t\tObject.defineProperty(exports, Symbol.toStringTag, { value: \"Module\" });"
+      ],
+      "tail": [
+        "\t\treturn module.exports;",
+        "\t}",
+        "});"
+      ],
+      "blankLines": [],
+      "blanksBefore": 1
+    },
+    "dsao/resume-gate": {
+      "head": [
+        "// ── dsao/resume-gate ─────────────────────────────────────────────────────",
+        "window.__ModuleLoader__.load({",
+        "\tid: \"dsao/resume-gate\",",
+        "\tfactory: function (require) {",
+        "\t\tvar module = { exports: {} };",
+        "\t\tvar exports = module.exports;",
+        "\t\tObject.defineProperty(exports, Symbol.toStringTag, { value: \"Module\" });"
+      ],
+      "tail": [
+        "\t\treturn module.exports;",
+        "\t}",
+        "});"
+      ],
+      "blankLines": [
+        "\t\t"
+      ],
+      "blanksBefore": 1
+    },
+    "dsao/resume-button": {
+      "head": [
+        "// ── dsao/resume-button（CSS 叠加：隐藏官方 icon + 显示 ▶） ────────────────",
+        "window.__ModuleLoader__.load({",
+        "\tid: \"dsao/resume-button\",",
+        "\tfactory: function (require) {",
+        "\t\tvar module = { exports: {} };",
+        "\t\tvar exports = module.exports;",
+        "\t\tObject.defineProperty(exports, Symbol.toStringTag, { value: \"Module\" });"
+      ],
+      "tail": [
+        "\t\treturn module.exports;",
+        "\t}",
+        "});"
+      ],
+      "blankLines": [
+        ""
+      ],
+      "blanksBefore": 2
+    },
+    "dsao/resume-continuity": {
+      "head": [
+        "// ── dsao/resume-continuity ───────────────────────────────────────────────",
+        "window.__ModuleLoader__.load({",
+        "\tid: \"dsao/resume-continuity\",",
+        "\tfactory: function (require) {",
+        "\t\tvar module = { exports: {} };",
+        "\t\tvar exports = module.exports;",
+        "\t\tObject.defineProperty(exports, Symbol.toStringTag, { value: \"Module\" });"
+      ],
+      "tail": [
+        "\t\treturn module.exports;",
+        "\t}",
+        "});"
+      ],
+      "blankLines": [
+        ""
+      ],
+      "blanksBefore": 1
+    },
+    "dsao/turn-fold": {
+      "head": [
+        "// ── dsao/turn-fold（turn 过程折叠：「运行中 · 计时」行 + 「已完成 · 时长」折叠头 + 总结回复） ──",
+        "window.__ModuleLoader__.load({",
+        "\tid: \"dsao/turn-fold\",",
+        "\tfactory: function (require) {",
+        "\t\tvar module = { exports: {} };",
+        "\t\tvar exports = module.exports;",
+        "\t\tObject.defineProperty(exports, Symbol.toStringTag, { value: \"Module\" });"
+      ],
+      "tail": [
+        "\t\treturn module.exports;",
+        "\t}",
+        "});"
+      ],
+      "blankLines": [
+        ""
+      ],
+      "blanksBefore": 1
+    },
+    "dsao/model-compact": {
+      "head": [
+        "// ── dsao/model-compact ────────────────────────────────────────────────────",
+        "window.__ModuleLoader__.load({",
+        "\tid: \"dsao/model-compact\",",
+        "\tfactory: function (require) {",
+        "\t\tvar module = { exports: {} };",
+        "\t\tvar exports = module.exports;",
+        "\t\tObject.defineProperty(exports, Symbol.toStringTag, { value: \"Module\" });"
+      ],
+      "tail": [
+        "\t\treturn module.exports;",
+        "\t}",
+        "});"
+      ],
+      "blankLines": [],
+      "blanksBefore": 1
+    },
+    "dsh-assistant-optimization": {
+      "head": [
+        "// ── dsh-assistant-optimization (main entry) ──────────────────────────────",
+        "window.__ModuleLoader__.load({",
+        "\tid: \"dsh-assistant-optimization\",",
+        "\tfactory: function (require) {",
+        "\t\tvar module = { exports: {} };",
+        "\t\tvar exports = module.exports;",
+        "\t\tObject.defineProperty(exports, Symbol.toStringTag, { value: \"Module\" });"
+      ],
+      "tail": [
+        "\t\treturn module.exports;",
+        "\t}",
+        "});"
+      ],
+      "blankLines": [],
+      "blanksBefore": 1
+    }
+  }
+}
