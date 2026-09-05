@@ -6,16 +6,16 @@
 
 ## Features
 
-Six capabilities, all plug-and-play. Official rendering is never replaced — the plugin shadows DSH components and delegates back to them, so Markdown, tool cards, images, and tables keep working exactly as shipped.
+Seven capabilities, all plug-and-play. Official rendering is never replaced — the plugin shadows DSH components and delegates back to them, so Markdown, tool cards, images, and tables keep working exactly as shipped.
 
 | | Capability | What it does |
 |---|---|---|
 | 💭 | **Reasoning fold** | Collapses mis-rendered chain-of-thought into the native "Think" block |
 | 📊 | **Mermaid diagrams** | Renders mermaid code blocks as interactive SVG (zoom / pan / touch) |
-| ✎ | **Edit diff counts** | Shows `+10/-2` on collapsed Write & Edit rows, no expand needed |
+| ✎ | **Tool-call grouping** | Collapses consecutive tool-call rows into one `# bash · N tools` header. Reasoning rows between calls do not break the group — merge across them; collapsed groups tuck those reasoning rows in, expanded groups indent them like members |
 | ✨ | **Prompt enhance** | Rewrites a rough draft into a clearer instruction in one click |
 | ▶ | **Resume-from-breakpoint** | After a manual stop or session error, the send button becomes a play key — hover shows a tooltip, one click resumes from the interruption with the currently selected model. Typing or starting a new turn instantly restores the normal send button. |
-| 📁 | **Turn folding** | When a turn finishes, its process (thinking, tool calls, intermediate text) auto-collapses into one "已完成 · 时长" header; the final summary reply stays expanded. Nothing collapses while a turn runs. |
+| 📁 | **Turn folding** | When a turn finishes, its process (thinking, tool calls, intermediate text) auto-collapses into one "已完成 · 时长" header; the final summary reply stays expanded. Interrupted-and-resumed turns merge into one group; mid-run steering messages collapse with a "· N 条插话" count. The plugin takes over the built-in transcript mode so folds never double up. |
 | 🛰️ | **Semantic search** | `context_search` — locate code from a vague description (Windsurf-backed) |
 
 ### Reasoning fold
@@ -35,9 +35,9 @@ DSH renders that as a single block. This plugin splits it at configurable marker
 
 Mermaid code blocks render inline as interactive SVG. Toolbar buttons zoom and reset, the scroll wheel zooms, and mouse or touch drag pans.
 
-### Edit diff counts
+### Edit diff counts (retired)
 
-Write and Edit rows carry a `+N` (added) / `-N` (removed) badge right after the file path, visible without expanding the row. A failed edit produces no diff, so it gets no badge.
+dsh 0.1.2+ renders native diff statistics on Write & Edit rows, so the plugin's own badges were retired in v1.8.0. The module is kept for older hosts but registers nothing on current versions.
 
 ### Prompt enhance
 

@@ -20,6 +20,21 @@
 var RESUMABLE_KINDS = { aborted: true, error: true }
 
 /**
+ * 从聊天快照时间线派生运行态：任一 turn status 为 open 即运行中。
+ * dsh 0.1.2 会话面快照不再稳定携带 running（供给端按需补齐）；
+ * 快照缺失/畸形一律 false（不误判为运行中）。
+ */
+function deriveRunning(chat) {
+  var turns = chat && chat.timeline && chat.timeline.turns
+  if (!turns || typeof turns.forEach !== 'function') return false
+  var running = false
+  turns.forEach(function (turn) {
+    if (turn && turn.status === 'open') running = true
+  })
+  return running
+}
+
+/**
  * 从 timeline 取最后一轮已关闭 turn 的终止原因 kind。
  * @returns {string|undefined} reason.kind 或 undefined。
  */
@@ -78,4 +93,5 @@ module.exports = {
   RESUMABLE_KINDS: RESUMABLE_KINDS,
   canResume: canResume,
   lastTurnReasonKind: lastTurnReasonKind,
+  deriveRunning: deriveRunning,
 }

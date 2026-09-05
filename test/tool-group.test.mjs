@@ -513,4 +513,42 @@ function ok(cond, msg) {
   ok(!think.hasAttribute('data-dsao-tg-collapsed'), 'indent: 展开态思考行可见')
 }
 
+// ── 13d. 多条纯思考步连续夹层 → 仍合并为同组 ─────────────────────────────
+{
+  const tg = freshModule()
+  const col = makeColumn()
+  col.appendChild(makeToolCall('read').item)
+  col.appendChild(makeThinkOnly())
+  col.appendChild(makeThinkOnly())
+  col.appendChild(makeToolCall('grep').item)
+  tg.startToolGroupObserver()
+  const h = headerOf(col)
+  ok(h && h.getAttribute('data-dsao-tg-size') === '2', 'multi-think: 跨多条思考行合并')
+  const thinks = col.querySelectorAll('[data-dsao-tg-collapsed]')
+  let thinkCollapsed = 0
+  for (const el of thinks) if (el.getAttribute('data-chat-flow-kind') === 'assistant-step') thinkCollapsed++
+  ok(thinkCollapsed === 2, 'multi-think: 两条思考行都随跨度收起')
+}
+
+// ── 18. 官方 turn 折叠联动：成员 hidden → 组头 hidden=until-found ────────
+{
+  const tg = freshModule()
+  const col = makeColumn()
+  const a = makeToolCall('read').item
+  const b = makeToolCall('grep').item
+  col.appendChild(a)
+  col.appendChild(b)
+  tg.startToolGroupObserver()
+  const h = headerOf(col)
+  ok(h && !h.hasAttribute('hidden'), 'fold-sync: 未折叠时组头无 hidden')
+
+  a.setAttribute('hidden', 'until-found') // 官方折叠 process member
+  tg.scanToolGroups(document.body)
+  ok(h.hasAttribute('hidden') && h.getAttribute('hidden') === 'until-found', 'fold-sync: 组头跟随官方折叠')
+
+  a.removeAttribute('hidden') // 官方展开
+  tg.scanToolGroups(document.body)
+  ok(!h.hasAttribute('hidden'), 'fold-sync: 官方展开后组头恢复')
+}
+
 console.log(`tool-group: ${passed} assertions passed`)

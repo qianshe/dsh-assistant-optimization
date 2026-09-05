@@ -2,7 +2,7 @@
 // Run: node test/resume-gate.test.mjs
 import assert from 'node:assert/strict'
 import { loadBundleModule } from './load-module.mjs'
-const { canResume, lastTurnReasonKind, RESUMABLE_KINDS } = loadBundleModule('dsao/resume-gate')
+const { canResume, lastTurnReasonKind, deriveRunning, RESUMABLE_KINDS } = loadBundleModule('dsao/resume-gate')
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 function makeTurn(num, reasonKind, status = 'closed') {
@@ -121,3 +121,14 @@ assert.equal(lastTurnReasonKind(undefined), undefined)
 assert.equal(lastTurnReasonKind({ turns: null }), undefined)
 
 console.log('resume-gate: all assertions passed')
+
+// ── deriveRunning：从聊天快照时间线派生运行态 ──────────────────────────────
+{
+  const timeline = (turns) => ({ timeline: { turns: new Map(turns.map((t, i) => [i, t])) } })
+  assert.equal(deriveRunning(timeline([{ status: 'open' }])), true, 'deriveRunning: open turn → true')
+  assert.equal(deriveRunning(timeline([{ status: 'closed' }, { status: 'open' }])), true, 'deriveRunning: 混合含 open → true')
+  assert.equal(deriveRunning(timeline([{ status: 'closed' }])), false, 'deriveRunning: 全 closed → false')
+  assert.equal(deriveRunning(timeline([])), false, 'deriveRunning: 空 turns → false')
+  assert.equal(deriveRunning(undefined), false, 'deriveRunning: 无 timeline → false')
+  assert.equal(deriveRunning({ timeline: { turns: {} } }), false, 'deriveRunning: turns 非 Map → false')
+}

@@ -75,14 +75,7 @@ function createResumeButton(React, gateMod) {
 			var c = chatRef.current
 			if (!s) return null
 			if (!c) return s
-			var running = s.running
-			if (running === undefined) {
-				running = false
-				var turns = c.timeline && c.timeline.turns
-				if (turns && typeof turns.forEach === 'function') {
-					turns.forEach(function (turn) { if (turn && turn.status === 'open') running = true })
-				}
-			}
+			var running = s.running !== undefined ? !!s.running : gateMod.deriveRunning(c)
 			return Object.assign({}, s, { chat: c, running: running })
 		}
 
