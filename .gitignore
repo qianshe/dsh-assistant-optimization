@@ -6,3 +6,6 @@ dist/
 .refs/
 
 dsh-assistant-optimization-*.tgz
+
+orig*.tmp*
+*.tmp.js
