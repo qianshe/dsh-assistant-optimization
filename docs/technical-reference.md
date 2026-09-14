@@ -571,7 +571,7 @@ dsh 0.1.2 的「归档」是**持久显示过滤器**，不是删除：`workspac
 |---|---|---|
 | 归档名单读取 | `registry.archivedSessionIds`、`registry.list()` | 公开 |
 | 工作区记账摘除 | `Workspace.detachSession(id)`（幂等，自走写链） | 公开 |
-| 正文定位 | `sessionPersistence.list()` → `locate(meta)` | 公开 |
+| 正文定位 | `sessionPersistence.list()` → `locate(meta)` | 公开（`list()` 有两种已发布形态：裸 header 数组、`SessionPersistenceSnapshot` 信封数组 `{ header, revision, sizeBytes }`；两者都读） |
 | 运行态真值 / 强制中止 | `ctx.agents.get(id).status`（与宿主列表 summary 同源）、`agent.cancel({kind:'user'})`（同 `session/cancel` 远端所用） | 公开 |
 | 归档名单写回 | `registry.state` + `registry.setState()`（经 `enqueueOperation` 串行） | **私有方法**，`setState` 就是它自己 `archiveSession` 用的那条 `global.set` 链 |
 | 投影缓存行 | `ctx.sessionProjectionCache.table.delete(id)` | **私有字段**，运行时可达 |
@@ -584,16 +584,17 @@ dsh 0.1.2 的「归档」是**持久显示过滤器**，不是删除：`workspac
 - 候选只来自归档名单：未归档 id → `refused: not-archived`（**force 也不能越过这条授权边界**，被拒者连 cancel 都不发生）；常驻会话按 agent 真身细分：`running`（`ctx.agents.get(id).status === 'running'`，与宿主列表 summary 同一真值源）与 `attached`（常驻但空闲）——上一版把两者混叫 `live-session`，正是"空闲常驻被误标运行中、删不掉"的根源。
 - **强制删除（force）**：面板「强制模式」开启后 `forceDeletableIds`（常驻的归档会话）才可勾选；删除前先 `agent.cancel({kind:'user'})`（不带 `keepInbox`，排队输入一并丢弃——留着会在 settle 后重跑并复活正文），再轮询 status 直到离开 running（默认 8s 超时）。等不到即拒绝 `not-settled`，**绝不在活写入者下面 unlink**——JSONL 后端按批 `open(path,'a')`，未静默的 writer 下次 flush 会重建半截文件。无 agents 注册表（旧宿主）→ 逐条 `no-agent-control`，scan 报 `capabilities.force=false`，面板不显示开关。
 - 客户端自保护：`current`（本标签页正在看的会话）在任何模式下都不可勾选、也不会被「全选可删」选中——设置对话框就挂在这个会话里。
-- 布局守卫：`locate()` 结果必须是 `<...>/<session-id>/session(.vN)?.jsonl[.zstd]`（文件名与父目录名双重校验），否则 `errors: unexpected-layout` 且**一个字节都不动**；没有 `locate()` 报 `locate-unavailable`，定位不到报 `no-location`。删除时会 unlink 会话目录里的**全部代际文件**（`session.jsonl[.zstd]` 和 `session.vN.jsonl[.zstd]`），避免旧代际文件在重启后被当作最新正文而复活。
-- 只 `rm` 文件，随后 `rmdir` 目录（非空即失败并被忽略）——全模块无递归删除。
+- 清单形态守卫：`sessionPersistence.list()` 的返回值有两种已发布形态——老后端返回裸 header，新后端返回 `SessionPersistenceSnapshot` 信封（id/cwd 在 `.header` 里）。两种都解出来用。**只认裸 header 是本次故障的根因**：在当前宿主上映射表恒为空 → 每次删除都"找不到目标"→ 一个字节没删，却把归档条目当成"正文本就没有"摘掉 → 重启后会话带着完整文件重新出现在「未分组」。因此"有条目但一条都映射不到 id"被当作**形态不认识**：`scan()` 直接抛错、`remove()` 整批抛错（路由转成 500 显示为错误横幅），归档集合一个字都不写。注意这与 `list()` 返回空数组（`shape='empty'`）严格区分——后者才是真的"正文已不存在"，允许只清记账。
+- 布局守卫：`locate()` 结果必须是 `<...>/<session-id>/session(.vN)?.jsonl[.zstd]`（文件名形状 + 目录名等于该 id 或其路径段编码形式），否则 `errors: unexpected-layout` 且**一个字节都不动**；没有 `locate()` 报 `locate-unavailable`，定位不到报 `no-location`。删除时会 unlink 会话目录里的**全部代际文件**（`session.jsonl[.zstd]` 和 `session.vN.jsonl[.zstd]`），避免旧代际文件在重启后被当作最新正文而复活。
+- 删除单位是**会话目录**：`fs.rm(dirPath, { recursive: true, force: true })`。后端把该目录声明为 session-owned，且"目录内版本号最大的代际"即会话正文——按文件精确保留只会漏删未来代际与其它旁路产物。递归的作用域由上面三道校验限定（路径只来自 `locate()`、文件名形状、目录名==id 编码），并且**永不触及 `<项目>` 这一层**，所以误删半径最大就是一个会话目录。目录已被手工清空时按 `absent` 报告（记账仍可清），大小与最后写入时间取自该目录实际内容（`readdir` + `stat` 汇总），不是 `locate()` 单文件。
 - 写入顺序：（force：cancel → settle）→ membership → 正文 → 投影行 → **`api-session/removed` 广播** → 归档名单。中途崩溃的最坏结果是"仍在归档名单但文件已无"（隐形、可重试），而不是反过来"侧栏可见却没有正文"。removed 广播放在归档名单摘除之前：客户端摘行的瞬间，隐藏该行的过滤器还在，行不会闪现到未分组；没有这一步，客户端会话列表店会永远保留幽灵行——归档过滤器又被本次操作摘掉，幽灵随即浮出到未分组，且最后一位为 true 的会话永远显示「运行中」（无代理可停、无可续跑）。广播仅在会话真正消失时发出（`log === 'removed' | 'absent'`）；transcript 被保留或删除失败的会话仍可加载，不广播。
 - 投影缓存行是 fold 捷径（"may be stale but never wrong"），删不掉也不影响正确性。
 
 ### 11.6 测试
 
-- `test/archive-cleanup.test.mjs`：解析与守卫、盘点视图（running/attached 分离）、force 全路径（cancel→settle→删、idle 免 cancel、不静默拒删、不越归档边界、无注册表降级）、写入顺序、多代际文件全部删除、kept/failed 不摘除归档、布局守卫、降级报告、路由装配（403/405/400/503 + emit 断言）。
+- `test/archive-cleanup.test.mjs`：解析与守卫、盘点视图（running/attached 分离、目录总大小与 `files`）、force 全路径（cancel→settle→删、idle 免 cancel、不静默拒删、不越归档边界、无注册表降级）、写入顺序（detach → readdir/stat → 递归 `rm` 会话目录 → 投影行 → 广播 → 归档名单）、**两种 `list()` 形态各跑一遍**、**形态不认识时整批拒绝且不写归档**、整目录清除（含非正文旁路产物）、kept/failed 不摘除归档、布局守卫、降级报告、路由装配（403/405/400/503 + emit 断言）。
 - `test/archive-cleanup-panel.test.mjs`：用 `test/load-module.mjs` 从 **lib/client.js 产物**里取真实模块，配 hook 形测试 React 驱动，断言渲染树、两步确认、强制模式解锁与 `force:true` 载荷、当前会话自锁、fetch 载荷与错误文案。
-- `test/archive-cleanup-integration.test.mjs`：临时目录按 JSONL 布局播种 + 真 `node:fs` + 真 HTTP server，断言字节真的消失、含额外文件的目录只失去正文、未归档/运行中的正文原样保留，以及 force 端到端（cancel 事件、settle 后 unlink、记账清零）。
+- `test/archive-cleanup-integration.test.mjs`：临时目录按 JSONL 布局播种 + 真 `node:fs` + 真 HTTP server，断言会话目录（含多代际、嵌套 `subagents/` 产物）真的整体消失、项目目录与兄弟会话原样保留其内容、未归档/运行中的正文不动、快照形态的 `list()` 同样能定位到目标，以及形态不认识时"零删除 + 归档集合不写"；force 端到端（cancel 事件、settle 后清除、记账清零）。
 
 ### 11.7 样式规约（借 ui-ux-pro-max 复核后定下）
 

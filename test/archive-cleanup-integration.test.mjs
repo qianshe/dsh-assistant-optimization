@@ -1,8 +1,9 @@
 // End-to-end over the REAL filesystem: a temp "sessions root" laid out exactly
-// like the shipped JSONL backend (`<root>/--<cwd>--/<id>/session.jsonl.zstd`),
+// like the shipped JSONL backend (`<root>/--<cwd>--/<id>/session.vN.jsonl.zstd`),
 // the real node:fs operations, and the route mounted on an in-process HTTP
-// server — so what is asserted is that bytes actually disappear, an unexpected
-// extra file is left alone, and the registry bookkeeping follows.
+// server — so what is asserted is that the session directory and its bytes
+// actually disappear, sibling sessions and the project directory survive, and
+// the registry bookkeeping follows.
 // Run: node test/archive-cleanup-integration.test.mjs
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
@@ -21,7 +22,7 @@ async function seedSession(root, id, { extraFile = false, files = ['session.json
   const dir = join(root, '--D-proj--', id)
   await mkdir(dir, { recursive: true })
   for (const file of files) await writeFile(join(dir, file), 'frame-one\nframe-two\n')
-  if (extraFile) await writeFile(join(dir, 'attachment.png'), 'not ours to take')
+  if (extraFile) await writeFile(join(dir, 'attachment.png'), 'a session-owned extra file')
   return join(dir, files[0])
 }
 
@@ -56,11 +57,17 @@ function registryDouble(archived, owners) {
   }
 }
 
-/** Persistence double whose locate() answers with real paths under `root`. */
-function persistenceDouble(root, ids, filename = 'session.jsonl.zstd') {
+/**
+ * Persistence double whose locate() answers with real paths under `root`.
+ * `shape` selects the listing contract: `flat` (bare headers, older backends)
+ * or `snapshot` (`SessionPersistenceSnapshot` envelopes, current ones).
+ */
+function persistenceDouble(root, ids, filename = 'session.jsonl.zstd', shape = 'flat') {
   return {
     async list() {
-      return ids.map((id) => ({ id, cwd: 'D:\\proj' }))
+      return ids.map((id) => (shape === 'snapshot'
+        ? { header: { id, cwd: 'D:\\proj' }, revision: 'rev', sizeBytes: 20 }
+        : { id, cwd: 'D:\\proj' }))
     },
     locate(meta) {
       return { kind: 'jsonl', path: join(root, '--D-proj--', String(meta.id), filename) }
@@ -226,12 +233,15 @@ test('deleting an archived session really removes its bytes and its bookkeeping'
     assert.equal(confirmed.archivePruned, true)
     assert.equal(confirmed.force, false)
 
-    // Real bytes: the transcript and its now-empty directory are gone.
+    // Real bytes: the whole session directory goes, transcript included.
     assert.equal(await exists(cleanTranscript), false)
     assert.equal(await exists(join(root, '--D-proj--', ID_CLEAN)), false)
-    // A directory holding something we did not expect keeps that file.
+    // The session directory is session-owned, so whatever sits inside it is the
+    // deleted session's data — the extra file goes with the directory...
     assert.equal(await exists(extraTranscript), false)
-    assert.equal(await exists(join(root, '--D-proj--', ID_EXTRA, 'attachment.png')), true)
+    assert.equal(await exists(join(root, '--D-proj--', ID_EXTRA, 'attachment.png')), false)
+    // ...while the project directory and every other session survive.
+    assert.equal(await exists(join(root, '--D-proj--')), true)
     // Untouched targets survive.
     assert.equal(await exists(liveTranscript), true)
     assert.equal(await exists(unarchivedTranscript), true)
@@ -259,29 +269,36 @@ test('deleting an archived session really removes its bytes and its bookkeeping'
   }
 })
 
-test('deleting removes every generation artifact so the session cannot resurface from v0', async () => {
+test('deleting purges every session-log generation so the session cannot resurface', async () => {
   // Real hosts write `session.v3.jsonl.zstd` while older `session.jsonl.zstd`
-  // files can remain in the same directory. `locate()` points at the current
-  // generation only; the backend treats the newest remaining generation as the
-  // session, so all generation artifacts must be unlinked together.
+  // files remain in the same directory, and the backend promotes the newest
+  // file it finds. `locate()` names the current generation only, so anything
+  // narrower than a directory purge leaves a generation to resurrect the row.
   const root = await mkdtemp(join(tmpdir(), 'dsao-archives-'))
   const v3 = await seedSession(root, ID_CLEAN, { files: ['session.v3.jsonl.zstd', 'session.jsonl.zstd'] })
   const dir = join(root, '--D-proj--', ID_CLEAN)
+  // A nested session-owned artifact (the shape descendants take) must go too.
+  await mkdir(join(dir, 'subagents', 'child-1'), { recursive: true })
+  await writeFile(join(dir, 'subagents', 'child-1', 'session.jsonl'), 'child frame\n')
   const registry = registryDouble([ID_CLEAN], [ID_CLEAN])
   const cleanup = createArchiveCleanup({
     registry,
-    persistence: persistenceDouble(root, [ID_CLEAN], 'session.v3.jsonl.zstd'),
+    persistence: persistenceDouble(root, [ID_CLEAN], 'session.v3.jsonl.zstd', 'snapshot'),
     sessions: { list: () => [] },
   })
   const result = await cleanup.remove([ID_CLEAN])
+  // Snapshot-listed session, multiple generations, nested artifacts: all gone.
   assert.equal(result.deleted[0].log, 'removed')
+  assert.ok(result.deleted[0].bytes > 0)
   assert.equal(await exists(v3), false, 'current generation is gone')
   assert.equal(await exists(join(dir, 'session.jsonl.zstd')), false, 'legacy generation is gone too')
-  assert.equal(await exists(dir), false, 'the now-empty session directory is gone')
+  assert.equal(await exists(join(dir, 'subagents', 'child-1', 'session.jsonl')), false, 'nested artifacts go with it')
+  assert.equal(await exists(dir), false, 'the session directory itself is gone')
+  assert.equal(await exists(join(root, '--D-proj--')), true, 'the project directory is never touched')
   assert.deepEqual(registry.state.archivedSessionIds.map(String), [])
 })
 
-test('the transcript content is the only thing removed, and reading it back is possible', async () => {
+test('only the deleted session goes; the sibling keeps its file and content', async () => {
   // Guards against "deleted the wrong session": the surviving id keeps its file
   // AND its content.
   const root = await mkdtemp(join(tmpdir(), 'dsao-archives-'))
@@ -298,6 +315,30 @@ test('the transcript content is the only thing removed, and reading it back is p
   assert.equal(result.deleted[0].log, 'removed')
   assert.equal(await exists(drop), false)
   assert.equal(await readFile(keep, 'utf8'), before)
+})
+
+test('a listing shape the guard cannot read deletes nothing', async () => {
+  // The historical bug: `list()` came back in an envelope whose entries had no
+  // readable id, every archive row was mistaken for "log already gone", and the
+  // archive set was pruned while the bytes stayed — resurrecting the session
+  // under 未分组 on restart. A shape we cannot map must abort the whole batch.
+  const root = await mkdtemp(join(tmpdir(), 'dsao-archives-'))
+  const transcript = await seedSession(root, ID_CLEAN)
+  const dir = join(root, '--D-proj--', ID_CLEAN)
+  const registry = registryDouble([ID_CLEAN], [ID_CLEAN])
+  const cleanup = createArchiveCleanup({
+    registry,
+    persistence: {
+      async list() { return [{ unknown: { id: ID_CLEAN } }] },
+      locate(meta) { return { kind: 'jsonl', path: join(dir, String(meta.id)) } },
+    },
+    sessions: { list: () => [] },
+  })
+  await assert.rejects(() => cleanup.scan(), /no readable session id/)
+  await assert.rejects(() => cleanup.remove([ID_CLEAN]), /no readable session id/)
+  assert.equal(await exists(transcript), true, 'not one byte is touched')
+  assert.equal(await exists(dir), true)
+  assert.deepEqual(registry.state.archivedSessionIds.map(String), [ID_CLEAN], 'and the archive set is left alone')
 })
 
 let failures = 0

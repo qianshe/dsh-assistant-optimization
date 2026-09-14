@@ -1,8 +1,11 @@
 // Verify the archived-session cleanup: id-list parsing, the inventory view, the
-// two hard guards (only-archived / never-live), the transcript layout guard, the
-// write ORDER (membership -> transcript -> checkpoint -> archive set), the
-// degraded-capability reports, and the route wiring (loopback fence, confirm
-// gate, missing-service 503s) mounted through apply() the way the host does.
+// two hard guards (only-archived / never-live), the session-directory delete
+// (every stored generation goes, the project directory never does), the
+// listing-shape guard (bare headers and snapshot envelopes both resolve; an
+// unmappable listing deletes nothing), the write ORDER
+// (membership -> purge -> checkpoint -> archive set), the degraded-capability
+// reports, and the route wiring (loopback fence, confirm gate, missing-service
+// 503s) mounted through apply() the way the host does.
 // Run: node test/archive-cleanup.test.mjs
 import assert from 'node:assert/strict'
 import { createArchiveCleanup, parseIdList } from '../lib/archive-cleanup.js'
@@ -18,14 +21,17 @@ function transcriptPath(id, dirName, filename = 'session.jsonl.zstd') {
 
 /**
  * fs double. Every call lands in the shared `trace`, so ordering across
- * services (detach vs unlink vs the archive-set write) is assertable.
- * `files` lists the names `readdir` reports inside a session directory; rm
- * removes the matching name from that list so a second readdir reflects the
- * deletion.
+ * services (detach vs purge vs the archive-set write) is assertable.
+ * `files` lists the names `readdir` reports inside a session directory; a
+ * recursive `rm` (the session-directory purge) empties that list, a plain one
+ * removes just the matching name. `rmCalls` records the options each delete
+ * carried, so the recursion itself is assertable.
  */
 function fsStub(trace, { size = 4096, failOnStat = false, failOnRm = false, failOnReaddir = false, files } = {}) {
   const names = files === undefined ? ['session.jsonl.zstd'] : files.slice()
+  const rmCalls = []
   return {
+    rmCalls,
     async readdir(path) {
       trace.push(['readdir', path])
       if (failOnReaddir) throw new Error('EACCES')
@@ -36,9 +42,14 @@ function fsStub(trace, { size = 4096, failOnStat = false, failOnRm = false, fail
       if (failOnStat) throw new Error('ENOENT')
       return { size, mtime: new Date('2026-09-01T00:00:00.000Z') }
     },
-    async rm(path) {
+    async rm(path, options) {
       trace.push(['rm', path])
+      rmCalls.push({ path, recursive: options?.recursive === true })
       if (failOnRm) throw new Error('EPERM')
+      if (options?.recursive === true) {
+        names.length = 0
+        return
+      }
       const base = String(path).split(/[\\/]/).pop()
       const index = names.indexOf(base)
       if (index !== -1) names.splice(index, 1)
@@ -99,11 +110,21 @@ function registryStub(trace, { archived, workspaces, options = {} }) {
   return registry
 }
 
-/** Persistence double: stored headers plus the JSONL backend's locate(). */
-function persistenceStub(sessions, { layout = 'default', hasLocate = true, filename } = {}) {
+/**
+ * Persistence double: stored logs plus the JSONL backend's locate().
+ * `shape` selects the two contract generations the module must tolerate:
+ * `flat` (older backends return bare headers from `list()`) and `snapshot`
+ * (current backends return `SessionPersistenceSnapshot` envelopes with the
+ * header nested under `.header`). `unknown` returns entries carrying no id at
+ * all — the shape the guard must refuse rather than read as "no stored logs".
+ */
+function persistenceStub(sessions, { layout = 'default', hasLocate = true, filename, shape = 'flat', unmappable = false } = {}) {
   const stub = {
     async list() {
-      return sessions.map((session) => ({ id: session.id, cwd: session.cwd }))
+      if (unmappable) return sessions.map((session) => ({ unknown: session.id }))
+      return sessions.map((session) => (shape === 'snapshot'
+        ? { header: { id: session.id, cwd: session.cwd }, revision: 'rev-' + session.id, sizeBytes: 4096 }
+        : { id: session.id, cwd: session.cwd }))
     },
     locate(meta) {
       if (layout === 'none') return undefined
@@ -158,6 +179,8 @@ function scenario(input = {}) {
     layout = 'default',
     hasLocate = true,
     filename,
+    listShape = 'flat',
+    unmappable = false,
     fsOptions = {},
     fsFiles,
     notify = 'ok',
@@ -181,7 +204,7 @@ function scenario(input = {}) {
         : undefined
   const cleanup = createArchiveCleanup({
     registry,
-    persistence: persistenceStub(sessions, { layout, hasLocate, filename }),
+    persistence: persistenceStub(sessions, { layout, hasLocate, filename, shape: listShape, unmappable }),
     sessions: { list: () => live.map((id) => ({ id })) },
     cache,
     fileOps,
@@ -208,15 +231,19 @@ async function testParseIdList() {
 }
 
 async function testScanInventory() {
+  // Two generations sit in each session directory: the inventory must report
+  // the directory total (that is what the purge frees), not just the file
+  // `locate()` happens to name.
   const { cleanup, trace } = scenario({
     live: ['session-b'],
     agentState: { idle: ['session-b'] },
     fsOptions: { size: 1000 },
+    fsFiles: ['session.v3.jsonl.zstd', 'session.jsonl.zstd'],
   })
   const report = await cleanup.scan()
   assert.equal(report.items.length, 2)
   assert.equal(report.archivedCount, 2)
-  assert.equal(report.totalBytes, 2000)
+  assert.equal(report.totalBytes, 4000)
   assert.deepEqual(report.live, ['session-b'])
   // attached-but-idle is NOT running: the badge and the guard must differ
   assert.deepEqual(report.running, [])
@@ -230,8 +257,19 @@ async function testScanInventory() {
   assert.equal(first.cwd, 'D:\\proj\\one')
   assert.equal(first.workspaces[0].title, 'one')
   assert.equal(first.path, transcriptPath('session-a'))
+  assert.equal(first.dirPath, `${SESSIONS_ROOT}\\session-a`)
+  assert.equal(first.bytes, 2000)
+  assert.equal(first.files, 2)
   assert.equal(first.mtime, '2026-09-01T00:00:00.000Z')
-  assert.deepEqual(verbs(trace), ['stat ' + transcriptPath('session-a'), 'stat ' + transcriptPath('session-b')])
+  assert.equal(report.storedCount, 2)
+  assert.deepEqual(verbs(trace), [
+    'readdir ' + `${SESSIONS_ROOT}\\session-a`,
+    'stat ' + transcriptPath('session-a', undefined, 'session.v3.jsonl.zstd'),
+    'stat ' + transcriptPath('session-a', undefined, 'session.jsonl.zstd'),
+    'readdir ' + `${SESSIONS_ROOT}\\session-b`,
+    'stat ' + transcriptPath('session-b', undefined, 'session.v3.jsonl.zstd'),
+    'stat ' + transcriptPath('session-b', undefined, 'session.jsonl.zstd'),
+  ])
   assert.deepEqual(report.capabilities, { archivePrune: true, checkpointDelete: true, detach: true, force: true })
 }
 
@@ -246,10 +284,22 @@ async function testScanReportsMissingLogs() {
 }
 
 async function testScanSurvivesStatFailure() {
+  // Unstatiable entries simply contribute nothing to the estimate; the row is
+  // still inventoried and still deletable.
   const { cleanup } = scenario({ fsOptions: { failOnStat: true } })
   const report = await cleanup.scan()
   assert.equal(report.totalBytes, 0)
-  assert.deepEqual(report.items.map((item) => item.problem), ['stat-failed', 'stat-failed'])
+  assert.deepEqual(report.items.map((item) => item.bytes), [0, 0])
+  assert.deepEqual(report.items.map((item) => item.files), [1, 1])
+  assert.equal(report.items[0].problem, undefined)
+}
+
+/** A directory that is already gone is reported, never guessed at. */
+async function testScanReportsMissingDirectory() {
+  const { cleanup } = scenario({ fsOptions: { failOnReaddir: false }, fsFiles: [] })
+  const report = await cleanup.scan()
+  assert.equal(report.totalBytes, 0)
+  assert.deepEqual(report.items.map((item) => item.files), [0, 0])
 }
 
 async function testRefusesNonArchivedAndLive() {
@@ -261,8 +311,8 @@ async function testRefusesNonArchivedAndLive() {
     { id: 'session-not-archived', reason: 'not-archived' },
   ])
   assert.deepEqual(result.deleted.map((entry) => entry.id), ['session-a'])
-  // Only the archived, non-live id lost a byte.
-  assert.deepEqual(trace.filter((entry) => entry[0] === 'rm'), [['rm', transcriptPath('session-a')]])
+  // Only the archived, non-live id lost a byte: its whole session directory.
+  assert.deepEqual(trace.filter((entry) => entry[0] === 'rm'), [['rm', `${SESSIONS_ROOT}\\session-a`]])
   // The refused live id keeps its archive entry; only the cleaned id left the set.
   assert.deepEqual(registry.state.archivedSessionIds.map(String), ['session-b'])
 }
@@ -292,19 +342,21 @@ async function testForceDeleteRunning() {
   assert.equal(forced.forced, true)
   const verbsList = verbs(trace)
   const cancelAt = verbsList.findIndex((line) => line.startsWith('cancel session-b'))
-  const rmAt = verbsList.findIndex((line) => line === 'rm ' + transcriptPath('session-b'))
-  assert.ok(cancelAt >= 0 && rmAt > cancelAt, 'the agent is cancelled before any unlink')
+  const rmAt = verbsList.findIndex((line) => line === 'rm ' + `${SESSIONS_ROOT}\\session-b`)
+  assert.ok(cancelAt >= 0 && rmAt > cancelAt, 'the agent is cancelled before any delete')
   assert.ok(verbsList[cancelAt].includes('user'), 'cancelled as a user stop')
 }
 
 /** An idle-attached session needs no cancel, only the force opt-in. */
 async function testForceDeleteAttachedIdle() {
-  const { cleanup, trace } = scenario({ live: ['session-b'], agentState: { idle: ['session-b'] } })
+  const { cleanup, trace, fileOps } = scenario({ live: ['session-b'], agentState: { idle: ['session-b'] } })
   const result = await cleanup.remove(['session-b'], { force: true })
   assert.equal(result.deleted[0].forced, true)
   assert.equal(result.deleted[0].cancelled, undefined)
   assert.equal(trace.filter((entry) => entry[0] === 'cancel').length, 0)
   assert.equal(trace.filter((entry) => entry[0] === 'rm').length, 1)
+  // The one delete is the recursive session-directory purge, not a file unlink.
+  assert.deepEqual(fileOps.rmCalls, [{ path: `${SESSIONS_ROOT}\\session-b`, recursive: true }])
 }
 
 /** An agent that refuses to settle is never deleted from under. */
@@ -348,13 +400,11 @@ async function testWriteOrdering() {
   assert.deepEqual(verbs(trace), [
     // membership first, while the header is still readable
     'detach w1 session-a',
-    // every Session-log generation in the session directory is enumerated,
-    // then each one is unlinked before the directory is emptied
+    // the directory is measured, then purged as one unit: every generation
+    // (and any other session-owned artifact) goes in a single recursive delete
     'readdir ' + `${SESSIONS_ROOT}\\session-a`,
     'stat ' + transcriptPath('session-a'),
-    'rm ' + transcriptPath('session-a'),
-    // the session directory is emptied, never taken recursively
-    'rmdir ' + `${SESSIONS_ROOT}\\session-a`,
+    'rm ' + `${SESSIONS_ROOT}\\session-a`,
     'checkpoint session-a',
     // the client list drops the row before the archive filter that hid it goes away
     'removed-event session-a',
@@ -366,6 +416,7 @@ async function testWriteOrdering() {
     id: 'session-a',
     log: 'removed',
     bytes: 4096,
+    files: 1,
     checkpoint: 'removed',
     cwd: 'D:\\proj\\one',
     announced: true,
@@ -613,13 +664,13 @@ async function testRestoreDoesNotAnnounce() {
   assert.equal(trace.filter((entry) => entry[0] === 'removed-event').length, 0)
 }
 
-/** Deleting must unlink every Session generation, not just the one `locate()` names. */
-async function testDeleteRemovesEverySessionGeneration() {
-  // Real dsh now writes `session.v3.jsonl.zstd` while older generations may
-  // still sit in the same directory (`session.jsonl.zstd`). `locate()` points
-  // at the current v3 only; leaving the older file would let the backend pick
-  // it up as the newest remaining generation on the next restart.
-  const { cleanup, trace, registry } = scenario({
+/** Deleting purges the whole session directory, not just the file `locate()` names. */
+async function testDeletePurgesTheWholeSessionDirectory() {
+  // Real dsh writes `session.v3.jsonl.zstd` while older generations may still
+  // sit beside it, and the backend promotes the newest file it finds. Deleting
+  // only what `locate()` names would leave a generation behind to resurrect
+  // the session after a restart, so the whole directory goes.
+  const { cleanup, trace, registry, fileOps } = scenario({
     archived: ['session-a'],
     sessions: [{ id: 'session-a', cwd: 'D:\\proj\\one' }],
     layout: 'v3',
@@ -627,19 +678,19 @@ async function testDeleteRemovesEverySessionGeneration() {
   })
   const result = await cleanup.remove(['session-a'])
   assert.equal(result.deleted[0].log, 'removed')
-  assert.equal(result.deleted[0].bytes, 2 * 4096)
+  // Every artifact inside the session directory is freed, size included.
+  assert.equal(result.deleted[0].bytes, 3 * 4096)
+  assert.equal(result.deleted[0].files, 3)
   const rmPaths = trace.filter((entry) => entry[0] === 'rm').map((entry) => entry[1])
-  assert.deepEqual(rmPaths, [
-    transcriptPath('session-a', undefined, 'session.v3.jsonl.zstd'),
-    transcriptPath('session-a', undefined, 'session.jsonl.zstd'),
-  ])
-  // A non-log session-owned artifact is never ours to take.
-  assert.equal(rmPaths.some((path) => path.endsWith('attachment.png')), false)
+  assert.deepEqual(rmPaths, [`${SESSIONS_ROOT}\\session-a`], 'one delete, scoped to the session directory')
+  assert.equal(fileOps.rmCalls[0].recursive, true, 'the session directory is purged recursively')
+  // Never the project directory — that would take sibling sessions with it.
+  assert.equal(rmPaths.some((path) => path === SESSIONS_ROOT), false)
   assert.deepEqual(registry.state.archivedSessionIds.map(String), [])
 
-  // An archived session whose stored artifact predates the current generation
-  // (v0 only) must also really disappear — `locate()` may name the missing
-  // v3 path, but the directory enumeration finds the actual v0 file.
+  // A session whose only stored artifact predates the current generation must
+  // disappear too: `locate()` names the missing v3 path, and the purge takes
+  // the directory regardless of which generation is inside.
   const legacyOnly = scenario({
     archived: ['session-a'],
     sessions: [{ id: 'session-a', cwd: 'D:\\proj\\one' }],
@@ -648,9 +699,49 @@ async function testDeleteRemovesEverySessionGeneration() {
   })
   const legacyResult = await legacyOnly.cleanup.remove(['session-a'])
   assert.equal(legacyResult.deleted[0].log, 'removed')
-  const legacyRms = legacyOnly.trace.filter((entry) => entry[0] === 'rm').map((entry) => entry[1])
-  assert.deepEqual(legacyRms, [transcriptPath('session-a', undefined, 'session.jsonl.zstd')])
+  assert.equal(legacyResult.deleted[0].bytes, 4096)
+  assert.deepEqual(legacyOnly.trace.filter((entry) => entry[0] === 'rm').map((entry) => entry[1]), [`${SESSIONS_ROOT}\\session-a`])
   assert.deepEqual(legacyOnly.registry.state.archivedSessionIds.map(String), [])
+}
+
+/**
+ * `sessionPersistence.list()` has two shipped shapes: bare headers (older
+ * backends) and `SessionPersistenceSnapshot` envelopes (`{ header }`, current
+ * ones). Both must find the same targets — reading only the bare shape is what
+ * made every delete on a current host a no-op that still un-archived the row.
+ */
+async function testHandlesBothListShapes() {
+  const flat = scenario({ archived: ['session-a'], sessions: [{ id: 'session-a', cwd: 'D:\\proj\\one' }], listShape: 'flat' })
+  const snapshot = scenario({ archived: ['session-a'], sessions: [{ id: 'session-a', cwd: 'D:\\proj\\one' }], listShape: 'snapshot' })
+
+  const flatReport = await flat.cleanup.scan()
+  const snapshotReport = await snapshot.cleanup.scan()
+  assert.deepEqual(snapshotReport.items.map((item) => item.id), ['session-a'], 'the envelope shape resolves to the same session')
+  assert.equal(snapshotReport.items[0].path, flatReport.items[0].path)
+  assert.equal(snapshotReport.storedCount, flatReport.storedCount)
+
+  const flatResult = await flat.cleanup.remove(['session-a'])
+  const snapshotResult = await snapshot.cleanup.remove(['session-a'])
+  assert.equal(flatResult.deleted[0].log, 'removed')
+  assert.equal(snapshotResult.deleted[0].log, 'removed', 'a snapshot-listed session is purged just the same')
+  assert.deepEqual(snapshotResult.deleted[0].bytes, 4096)
+  assert.deepEqual(snapshot.trace.filter((entry) => entry[0] === 'rm').map((entry) => entry[1]), [`${SESSIONS_ROOT}\\session-a`])
+  assert.deepEqual(snapshot.registry.state.archivedSessionIds.map(String), [])
+}
+
+/** An unmappable `list()` is refused loudly — never read as "these logs are gone". */
+async function testUnmappableListRefusesEverything() {
+  const { cleanup, registry, trace } = scenario({ unmappable: true })
+
+  await assert.rejects(() => cleanup.scan(), /no readable session id/)
+  // remove() throws the same way; the route turns it into a 500 the GUI shows
+  // as an error banner, which beats reporting a successful cleanup of nothing.
+  await assert.rejects(() => cleanup.remove(['session-a']), /no readable session id/)
+
+  assert.equal(trace.filter((entry) => entry[0] === 'rm').length, 0, 'not one byte is touched')
+  assert.equal(trace.filter((entry) => entry[0] === 'detach').length, 0, 'no account changes either')
+  assert.equal(trace.filter((entry) => entry[0] === 'archive-set').length, 0, 'the archive set is never written')
+  assert.deepEqual(registry.state.archivedSessionIds.map(String), ['session-a', 'session-b'])
 }
 
 /** A session whose transcript was kept or failed must stay in the archive set. */
@@ -672,6 +763,7 @@ const tests = [
   ['scan inventory', testScanInventory],
   ['scan reports missing logs', testScanReportsMissingLogs],
   ['scan survives stat failure', testScanSurvivesStatFailure],
+  ['scan reports missing directory', testScanReportsMissingDirectory],
   ['refuses non-archived and live', testRefusesNonArchivedAndLive],
   ['force delete running', testForceDeleteRunning],
   ['force delete attached idle', testForceDeleteAttachedIdle],
@@ -679,7 +771,9 @@ const tests = [
   ['force does not bypass archive guard', testForceDoesNotBypassArchiveGuard],
   ['force without agents registry', testForceWithoutAgentsRegistry],
   ['write ordering', testWriteOrdering],
-  ['delete removes every session generation', testDeleteRemovesEverySessionGeneration],
+  ['delete purges the whole session directory', testDeletePurgesTheWholeSessionDirectory],
+  ['handles both list() shapes', testHandlesBothListShapes],
+  ['unmappable list() refuses everything', testUnmappableListRefusesEverything],
   ['kept/failed transcript stays archived', testKeptOrFailedTranscriptStaysArchived],
   ['layout and locate guards', testLayoutAndLocateGuards],
   ['archive prune degradation', testArchivePruneDegradation],
