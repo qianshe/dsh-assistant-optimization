@@ -49,11 +49,23 @@ function makeSession({ timeline, running, queue, subagent } = {}) {
   assert.deepEqual(canResume(s, ''), { canResume: true, terminalKind: 'error' })
 }
 
-// ── 3. Max tokens → NOT resumable (treated as error category, not separately) ─
+// ── 3. Max tokens → resumable (design doc FR-1 + host RESUME_TERMINAL_KINDS) ─
 {
   const tl = makeTimeline(makeTurn(1, 'max-tokens'))
   const s = makeSession({ timeline: tl })
-  assert.equal(canResume(s, '').canResume, false)
+  assert.deepEqual(canResume(s, ''), { canResume: true, terminalKind: 'max-tokens' })
+}
+
+// ── 3b. Crash-repaired (interrupted) → resumable ─────────────────────────
+// dsh-session repair.js synthesizes turn/end{interrupted} on reload; the host
+// route accepts it, and the client gate must too or the session is wedged.
+{
+  const tl = makeTimeline(makeTurn(1, 'interrupted'))
+  const s = makeSession({ timeline: tl })
+  assert.deepEqual(canResume(s, ''), { canResume: true, terminalKind: 'interrupted' })
+  // multi-turn: an earlier interrupted turn superseded by a clean one → not resumable
+  const tl2 = makeTimeline(makeTurn(1, 'interrupted'), makeTurn(2, 'completed'))
+  assert.equal(canResume(makeSession({ timeline: tl2 }), '').canResume, false)
 }
 
 // ── 4. Normal completion → NOT resumable ─────────────────────────────────
@@ -102,7 +114,12 @@ function makeSession({ timeline, running, queue, subagent } = {}) {
 {
   const tl = makeTimeline(makeTurn(1, 'aborted'))
   const base = makeSession({ timeline: tl })
-  assert.equal(canResume({ ...base, running: true }, '').reason, 'running')
+  // running + an open turn in the timeline → blocked (genuinely executing)
+  const openTl = makeTimeline(makeTurn(1, 'aborted'), makeTurn(2, undefined, 'open'))
+  assert.equal(canResume({ ...makeSession({ timeline: openTl }), running: true }, '').reason, 'running')
+  assert.equal(canResume({ ...base, running: true, chat: undefined }, '').reason, 'running')
+  // running + fully-closed timeline → stale bit yields to the terminal check
+  assert.deepEqual(canResume({ ...base, running: true }, ''), { canResume: true, terminalKind: 'aborted' })
   assert.equal(canResume({ ...base, subagent: { address: {} } }, '').reason, 'subagent')
   assert.equal(canResume(base, 'hello').reason, 'draft-not-empty')
   assert.equal(canResume(base, '  \t ').canResume, true)

@@ -79,11 +79,15 @@ function agentStub({
   }
 }
 
-// 1. Three routes register; both named paths resolve; registration order keeps
+// 1. Four routes register; both named paths resolve; registration order keeps
 //    the enhance route LAST so legacy single-slot captures still see it.
 {
   const routes = mount({})
-  assert.equal(routes.size, 3, `expected 3 routes, got ${routes.size}`)
+  assert.equal(routes.size, 4, `expected 4 routes, got ${routes.size}`)
+  assert.deepEqual(
+    [...routes.keys()].sort(),
+    ['/api/dsao/archives', '/api/dsao/prompt-enhance', '/api/dsao/resume', '/api/dsao/windsurf-key'].sort(),
+  )
   assert.ok(routes.has(RESUME_PATH), 'resume route must be registered')
   assert.equal(routes.get(RESUME_PATH).kind, 'exact')
   assert.equal([...routes.keys()][routes.size - 1], ENHANCE_PATH, 'prompt-enhance must remain the last registration for legacy capture tests')

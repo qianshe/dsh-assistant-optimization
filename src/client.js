@@ -10,6 +10,7 @@
 		var resumeButton = require("dsao/resume-button");
 		var resumeContinuity = require("dsao/resume-continuity");
 		var turnFold = require("dsao/turn-fold");
+		var archiveCleanup = require("dsao/archive-cleanup");
 
 		// ── 会话数据注入（dsh 0.1.2+ 供给端）────────────────────────────────
 		// 槽位 props 不再携带会话（conversation 包全部 renderSlot 均为空 props），
@@ -196,6 +197,23 @@
 				return slots.register(
 					{ name: "settings.general.item", id: "turn-fold", order: 50 },
 					function () { return React.createElement(TurnFoldSetting); }
+				);
+			});
+
+			// 2d. Settings section「归档会话」：dsh 既没有归档视图、也没有取消归档与删除 API，
+			//     这是一整页操作面（导航独立一项），不是一条通用偏好开关。
+			//     会话标题取自客户端自己的 sessions 快照：宿主清单只有 id/路径。
+			slots.inject("settings.section", function () {
+				var ArchiveCleanupSection = archiveCleanup.createArchiveCleanupSection(React, function () {
+					try {
+						return ctx.sessions.list.getSnapshot();
+					} catch (e) {
+						return null;
+					}
+				}).ArchiveCleanupSection;
+				return slots.register(
+					{ name: "settings.section", id: "archive-cleanup", order: 30, label: function () { return "归档会话"; } },
+					function () { return React.createElement(ArchiveCleanupSection); }
 				);
 			});
 

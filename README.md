@@ -6,7 +6,7 @@
 
 ## Features
 
-Seven capabilities, all plug-and-play. Official rendering is never replaced — the plugin shadows DSH components and delegates back to them, so Markdown, tool cards, images, and tables keep working exactly as shipped.
+Eight capabilities, all plug-and-play. Official rendering is never replaced — the plugin shadows DSH components and delegates back to them, so Markdown, tool cards, images, and tables keep working exactly as shipped.
 
 | | Capability | What it does |
 |---|---|---|
@@ -17,6 +17,7 @@ Seven capabilities, all plug-and-play. Official rendering is never replaced — 
 | ▶ | **Resume-from-breakpoint** | After a manual stop or session error, the send button becomes a play key — hover shows a tooltip, one click resumes from the interruption with the currently selected model. Typing or starting a new turn instantly restores the normal send button. |
 | 📁 | **Turn folding** | When a turn finishes, its process (thinking, tool calls, intermediate text) auto-collapses into one "已完成 · 时长" header; the final summary reply stays expanded. Interrupted-and-resumed turns merge into one group; mid-run steering messages collapse with a "· N 条插话" count. The plugin takes over the built-in transcript mode so folds never double up. |
 | 🛰️ | **Semantic search** | `context_search` — locate code from a vague description (Windsurf-backed) |
+| 🧹 | **Archived-session cleanup** | Lists what archiving hid, frees the disk it still occupies, and un-archives — in one click, no host restart, no hand-edited JSON |
 
 ### Reasoning fold
 
@@ -51,7 +52,7 @@ When a conversation stops abnormally — the user clicks **Stop** or the session
 
 - **One click** sends a resume signal via the host route; the agent picks up from the interruption using whatever model is currently selected in the composer.
 - **Instant revert**: typing in the draft, or the agent starting to run, immediately restores the normal send/stop button — no stuck play icon.
-- **Gate logic**: reads `session.chat.timeline` for the last closed turn's `turn/end` reason. Only `aborted` (user stop) and `error` (session error) trigger the play button; normal completions and max-tokens do not.
+- **Gate logic**: reads `session.chat.timeline` for the last closed turn's `turn/end` reason. `aborted` (user stop), `error`, `max-tokens` (truncation), and `interrupted` (crash-repaired by dsh-session's synthetic closers) trigger the play button — the same set the host route accepts. Normal completions and other kinds do not. A `running` bit only blocks the gate when the timeline corroborates it (an open turn): a stale running flag with a fully closed timeline falls through to the terminal check, so a crashed session can always be resumed instead of wedging in "running".
 - **Empty marker rows**: when the resume marker enters the transcript, the plugin replaces the blank bubble + copy button with a subtle "已从中断处继续" hint line.
 - **Implementation**: CSS-overlay approach — the official button's SVG is hidden via `data-dsao-resume` attribute + a play SVG sibling, so React's re-render cycle is never disrupted.
 
@@ -70,6 +71,23 @@ A host-side tool for **vague or unclear** searches: pass a natural-language quer
 **Key gating — the whole point.** The tool and its one-line prompt guidance are registered *only* when a Windsurf key resolves. With no key, nothing is registered, so the model is never told about a tool it cannot call.
 
 The key is resolved in this order (first hit wins): `WINDSURF_API_KEY` env → manual entry (**Settings → General → Windsurf API Key**, stored at `~/.dsh/dsao-windsurf-key`, `0600`) → local auto-read from the logged-in Windsurf/Devin editor's `state.vscdb`. `DSAO_FC_AUTO_KEY=0` disables auto-read. See `lib/fast-context/NOTICE.md` for the non-official protocol note.
+
+### Archived-session cleanup
+
+Archiving a session in dsh 0.1.2 hides it and nothing else: the archive set is a display filter, so the archived row disappears from the grouped list, the flat list **and** search, while its transcript, projection checkpoint, and workspace account keep occupying `~/.dsh`. There is no unarchive action anywhere in the GUI, and the persistence seam ships no deletion API — pruning is documented as "out-of-band backend maintenance". The result is invisible disk that you can neither see, restore, nor clean.
+
+**Settings → Archived sessions** — its own entry in the settings nav, not a row inside General, because this is a workflow page rather than a preference toggle — scans the archive set and reports, per session: title (from the live session list), owning project, transcript path, size, and last write. From there:
+
+- **Delete selected** — unlinks every stored transcript generation (the JSONL backend keeps `session.jsonl[.zstd]` and `session.vN.jsonl[.zstd]` side by side; deleting only the current one would let an older generation resurface after a restart), removes the projection checkpoint row, detaches the session from its project account, announces `api-session/removed` so every open GUI drops the sidebar row immediately (no ghost under ungrouped, no stale "running" dot), and prunes the archive entry. Two clicks: the first arms the button, the second commits. Irreversible — the transcript is the only copy of that history, so the row also carries an **export** link (the built-in `session.export` route) to grab a ZIP first.
+- **Un-archive selected** — writes the id back out of the archive set only. Files untouched, the row reappears in the sidebar. This is the missing "unarchive".
+- **Select deletable** — picks everything the guards allow.
+- **Force mode** (toggle, only offered when the host exposes the agents registry) — unlocks archived sessions that are still **attached**: a running one is first cancelled through the same `agent.cancel` the official stop button uses (queued input dropped too), awaited until settled, and only then deleted. A session that refuses to settle is refused (`not-settled`) rather than unlinked under its writer — the JSONL backend opens the transcript per batch, so an unsettled writer would resurrect a partial file. The session you are currently viewing can never be picked, in any mode.
+
+Nothing here can touch a session you have not archived: the archive set drives the candidate list, so an un-archived id is refused (`not-archived`) even under force — and a protected session is not even cancelled. Attached sessions need force to be offered at all, split by the host's own truth source into `running` (live agent executing) and `attached` (resident but idle — the earlier build mislabeled both as "live-session" and blocked them). A transcript whose path does not match the documented `<root>/<project>/<session-id>/session(.vN)?.jsonl[.zstd]` layout is left alone. All generation artifacts (`session.jsonl[.zstd]` plus any `session.vN.jsonl[.zstd]`) are unlinked; the session directory is removed only if it is then empty, so there is no recursive delete anywhere.
+
+This works **without stopping the host**. Editing `~/.dsh/storages/workspace.json` from outside is unsafe — the JSON `single` layout is memory-authoritative, republishes the whole file on every write, and locks nothing across processes — but inside the host the same facts are reached through the owning services' serialized write chains, so memory and disk move together and the workspace follow stream republishes the archive set. An open GUI tab updates without a refresh. Two of the touches are private-by-type (the archive set has no public mutator, and the checkpoint table is service-internal): both are probed at call time and degrade to an honest report instead of a crash or a guess.
+
+The page speaks only in the host's own `--dsw-alias-*` design tokens — no literal colors, so it re-themes with the shell in light and dark — and models all four states: a skeleton while scanning, an explicit empty state, a retryable error banner, and a result banner that only reads as success when nothing was refused. Interaction states (`hover`, `focus-visible`, `disabled`, the sticky table header, `prefers-reduced-motion`) live in a scoped stylesheet instead of inline styles, because inline styles cannot express them. Rules and rationale: [`docs/technical-reference.md`](./docs/technical-reference.md) §11.7.
 
 ## Installation
 
@@ -111,6 +129,9 @@ node test/resume-gate.test.mjs
 node test/resume-route.test.mjs
 node test/resume-continuity.test.mjs
 node test/turn-fold.test.mjs
+node test/archive-cleanup.test.mjs
+node test/archive-cleanup-panel.test.mjs
+node test/archive-cleanup-integration.test.mjs
 node test/fast-context-gate.test.mjs
 node test/content-embed.test.mjs
 node test/turn-fold-sync.test.mjs

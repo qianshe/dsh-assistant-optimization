@@ -541,8 +541,74 @@ cordis_run({ pluginId, packageId, mode: 'update' })
 |-----------|------|------|----------|
 | `conversation.chat.node` | keyed | 消息节点渲染 | `assistant-step`, `tool-call` |
 | `tool.call.toolview` | keyed | 工具视图 | `write`, `edit`, `read`, `bash`, `search`, `web`, `todo` |
-| `settings.general.item` | list | 设置页通用设置项 | `thinking-tags` 等 |
+| `settings.general.item` | list | 设置页通用设置项（单条偏好） | `thinking-tags` 等 |
+| `settings.section` | list | 设置页独立分区：导航一项 = 一整页 | `general`(0)、`models`(10)、`plugins`(15)、`agent-presets`(20)、`archive-cleanup`(30) |
 | `conversation.details.tool` | single | 工具详情面板 | — |
+
+---
+
+## 11. 归档会话清理（archive-cleanup）
+
+### 11.1 为什么需要
+
+dsh 0.1.2 的「归档」是**持久显示过滤器**，不是删除：`workspaceRegistry` 持有一个 `archivedSessionIds` 集合，Web 侧栏把它同时从分组树、扁平列表和搜索结果里减掉（`dsh-client-ui-workspace` 的 `deriveGroups` / `deriveFlat` / `deriveSearchResults`）。归档既不释放磁盘，也没有任何取消归档入口；持久层同样没有删除 API（官方 README 写作 "pruning stored sessions is out-of-band backend maintenance"）。用户侧表现为：会话看不见、找不回、磁盘也不降。
+
+### 11.2 三层结构
+
+| 层 | 位置 | 职责 |
+|---|---|---|
+| Host 纯逻辑 | `lib/archive-cleanup.js` | `scan()` / `remove()` / `restore()`，全部能力探测，不碰 HTTP |
+| Host 路由 | `lib/index.js` → `archivesRoute(ctx)` | `/api/dsao/archives`：GET 盘点、POST `delete`（需 `confirm:true`）/`restore`，loopback 围栏与既有 `/api/dsao/*` 同款 |
+| Client 面板 | `src/modules/archive-cleanup.js` → `dsao/archive-cleanup` | 注册为 `settings.section` id `archive-cleanup`（order 30，设置导航独立一项「归档会话」；一整页而非通用页的一行），标题取客户端 `sessions.list` 快照 |
+
+### 11.3 为什么可以不停宿主
+
+「必须停宿主」只成立于**跨进程手改文件**：`dsh-storage-json` 的 `single` 布局内存权威、每次写整体重写 `<unit>.json`、无跨进程锁。在 host 进程内则走 owner service 自己的串行域写链（`global.set` / `table.update`），内存与磁盘同步移动，`domain/changed` 还会让 workspace follow 流重发 `archived` 增量——已打开的 GUI 无需刷新即更新。
+
+### 11.4 用到的 API 与两处私有
+
+| 用途 | 入口 | 性质 |
+|---|---|---|
+| 归档名单读取 | `registry.archivedSessionIds`、`registry.list()` | 公开 |
+| 工作区记账摘除 | `Workspace.detachSession(id)`（幂等，自走写链） | 公开 |
+| 正文定位 | `sessionPersistence.list()` → `locate(meta)` | 公开 |
+| 运行态真值 / 强制中止 | `ctx.agents.get(id).status`（与宿主列表 summary 同源）、`agent.cancel({kind:'user'})`（同 `session/cancel` 远端所用） | 公开 |
+| 归档名单写回 | `registry.state` + `registry.setState()`（经 `enqueueOperation` 串行） | **私有方法**，`setState` 就是它自己 `archiveSession` 用的那条 `global.set` 链 |
+| 投影缓存行 | `ctx.sessionProjectionCache.table.delete(id)` | **私有字段**，运行时可达 |
+| 客户端列表行摘除 | `ctx.emit('api-session/removed', id)`（dsh-api-remotes 对全部 emit 模式事件做 `ctx.on` 监听并转发；客户端 `applyMutation` 的 `kind:'remove'` 把 id 从 `summaries` 过滤掉） | 公开事件契约 |
+
+私有入口不可用时**降级不猜**：`scan()` 报 `capabilities.archivePrune=false`，面板直接显示"当前宿主未暴露归档名单写入口"。另一条看似可行的路已实测不通：`ctx.storageDomain.open(spec)` 对已打开的 unit 抛 `already-open`，所以插件无法自开 `workspace` 域绕开 registry。
+
+### 11.5 守卫与顺序
+
+- 候选只来自归档名单：未归档 id → `refused: not-archived`（**force 也不能越过这条授权边界**，被拒者连 cancel 都不发生）；常驻会话按 agent 真身细分：`running`（`ctx.agents.get(id).status === 'running'`，与宿主列表 summary 同一真值源）与 `attached`（常驻但空闲）——上一版把两者混叫 `live-session`，正是"空闲常驻被误标运行中、删不掉"的根源。
+- **强制删除（force）**：面板「强制模式」开启后 `forceDeletableIds`（常驻的归档会话）才可勾选；删除前先 `agent.cancel({kind:'user'})`（不带 `keepInbox`，排队输入一并丢弃——留着会在 settle 后重跑并复活正文），再轮询 status 直到离开 running（默认 8s 超时）。等不到即拒绝 `not-settled`，**绝不在活写入者下面 unlink**——JSONL 后端按批 `open(path,'a')`，未静默的 writer 下次 flush 会重建半截文件。无 agents 注册表（旧宿主）→ 逐条 `no-agent-control`，scan 报 `capabilities.force=false`，面板不显示开关。
+- 客户端自保护：`current`（本标签页正在看的会话）在任何模式下都不可勾选、也不会被「全选可删」选中——设置对话框就挂在这个会话里。
+- 布局守卫：`locate()` 结果必须是 `<...>/<session-id>/session(.vN)?.jsonl[.zstd]`（文件名与父目录名双重校验），否则 `errors: unexpected-layout` 且**一个字节都不动**；没有 `locate()` 报 `locate-unavailable`，定位不到报 `no-location`。删除时会 unlink 会话目录里的**全部代际文件**（`session.jsonl[.zstd]` 和 `session.vN.jsonl[.zstd]`），避免旧代际文件在重启后被当作最新正文而复活。
+- 只 `rm` 文件，随后 `rmdir` 目录（非空即失败并被忽略）——全模块无递归删除。
+- 写入顺序：（force：cancel → settle）→ membership → 正文 → 投影行 → **`api-session/removed` 广播** → 归档名单。中途崩溃的最坏结果是"仍在归档名单但文件已无"（隐形、可重试），而不是反过来"侧栏可见却没有正文"。removed 广播放在归档名单摘除之前：客户端摘行的瞬间，隐藏该行的过滤器还在，行不会闪现到未分组；没有这一步，客户端会话列表店会永远保留幽灵行——归档过滤器又被本次操作摘掉，幽灵随即浮出到未分组，且最后一位为 true 的会话永远显示「运行中」（无代理可停、无可续跑）。广播仅在会话真正消失时发出（`log === 'removed' | 'absent'`）；transcript 被保留或删除失败的会话仍可加载，不广播。
+- 投影缓存行是 fold 捷径（"may be stale but never wrong"），删不掉也不影响正确性。
+
+### 11.6 测试
+
+- `test/archive-cleanup.test.mjs`：解析与守卫、盘点视图（running/attached 分离）、force 全路径（cancel→settle→删、idle 免 cancel、不静默拒删、不越归档边界、无注册表降级）、写入顺序、多代际文件全部删除、kept/failed 不摘除归档、布局守卫、降级报告、路由装配（403/405/400/503 + emit 断言）。
+- `test/archive-cleanup-panel.test.mjs`：用 `test/load-module.mjs` 从 **lib/client.js 产物**里取真实模块，配 hook 形测试 React 驱动，断言渲染树、两步确认、强制模式解锁与 `force:true` 载荷、当前会话自锁、fetch 载荷与错误文案。
+- `test/archive-cleanup-integration.test.mjs`：临时目录按 JSONL 布局播种 + 真 `node:fs` + 真 HTTP server，断言字节真的消失、含额外文件的目录只失去正文、未归档/运行中的正文原样保留，以及 force 端到端（cancel 事件、settle 后 unlink、记账清零）。
+
+### 11.7 样式规约（借 ui-ux-pro-max 复核后定下）
+
+| 规则 | 原因 |
+|---|---|
+| 颜色只用宿主 `--dsw-alias-*` 令牌，**禁止字面色值** | 每个别名在 `dsh-client-ui-theme` 里都有浅/深两值；写死 hex 会在另一套主题下悄悄坏掉（第一版就踩了：armed 态硬编码 `#5b2323`） |
+| 只用**确实存在**的令牌名 | 第一版引用了不存在的 `--dsw-alias-interactive-bg-base`，按钮底色实际是透明。可用令牌从主题包里枚举，不靠记忆 |
+| 交互态用 class，不用 inline style | `:hover / :active / :disabled / :focus-visible / position:sticky / prefers-reduced-motion / accent-color` 只有 CSS 能表达；注入方式与插件其他模块一致（`<style id="dsao-archive-cleanup-css">`，每文档一次） |
+| 语义色分工 | 危险 `state-error-primary` + `interactive-bg-hover-danger`；警告 `state-warn-label`；成功 `state-success-primary`；选中行 `interactive-bg-active`、行 hover `interactive-bg-hover`、表头 `label-caption` |
+| 层级与密度 | 页标题 15/500 → 统计 chip 12（数值 `label-primary` 加粗）→ 控件 13（高 28、圆角 6）→ 表格 12（行高 ~30、`border-l2` 分隔、表头 sticky）；数字列 `font-variant-numeric: tabular-nums` 右对齐 |
+| 四态必须建模 | loading（3 行骨架，`prefers-reduced-motion` 下不动）、empty（"没有归档会话，无需清理"并撤掉删除按钮）、error（`role="alert"` 横幅 + 重试）、result（`role="status"`；只有全绿才用 ok 语气，出现拒绝/失败/未写入自动降级为 warn） |
+| 可达性 | 每个 checkbox 带 `aria-label` 且被 `<label for>` 关联（标题即点击区）；`th scope="col"`；容器 `aria-busy`；焦点环 `outline:2px solid brand-primary` + `offset:2px`；禁用项 `cursor:not-allowed` + 45% 透明 |
+| 破坏性动作 | 两步确认；armed 态换底色并把"释放 X MB，不可恢复"写进按钮文案；选择变化或 8s 超时自动解除（不留悬挂的待确认态） |
+
+`test/archive-cleanup-panel.test.mjs` 把前四条做成了断言（扫描 CSS：不得出现 `#hex`、`rgba(`、非 `--dsw-alias-` 变量；必须含 hover / focus-visible / disabled / sticky / reduced-motion / accent-color / tabular-nums），所以样式回退会直接红。
 
 ---
 

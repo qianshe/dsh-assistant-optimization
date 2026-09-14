@@ -14,6 +14,7 @@
     "dsao/resume-continuity",
     "dsao/turn-fold",
     "dsao/model-compact",
+    "dsao/archive-cleanup",
     "dsh-assistant-optimization"
   ],
   "fileHeader": [
@@ -47,6 +48,7 @@
     "dsao/resume-continuity": "// ── dsao/resume-continuity ───────────────────────────────────────────────",
     "dsao/turn-fold": "// ── dsao/turn-fold（turn 过程折叠：「运行中 · 计时」行 + 「已完成 · 时长」折叠头 + 总结回复） ──",
     "dsao/model-compact": "// ── dsao/model-compact ────────────────────────────────────────────────────",
+    "dsao/archive-cleanup": "// ── dsao/archive-cleanup ─────────────────────────────────────────────────",
     "dsh-assistant-optimization": "// ── dsh-assistant-optimization (main entry) ──────────────────────────────"
   },
   "blocks": {
@@ -299,6 +301,24 @@
         "// ── dsao/model-compact ────────────────────────────────────────────────────",
         "window.__ModuleLoader__.load({",
         "\tid: \"dsao/model-compact\",",
+        "\tfactory: function (require) {",
+        "\t\tvar module = { exports: {} };",
+        "\t\tvar exports = module.exports;",
+        "\t\tObject.defineProperty(exports, Symbol.toStringTag, { value: \"Module\" });"
+      ],
+      "tail": [
+        "\t\treturn module.exports;",
+        "\t}",
+        "});"
+      ],
+      "blankLines": [],
+      "blanksBefore": 1
+    },
+    "dsao/archive-cleanup": {
+      "head": [
+        "// ── dsao/archive-cleanup ─────────────────────────────────────────────────",
+        "window.__ModuleLoader__.load({",
+        "\tid: \"dsao/archive-cleanup\",",
         "\tfactory: function (require) {",
         "\t\tvar module = { exports: {} };",
         "\t\tvar exports = module.exports;",
