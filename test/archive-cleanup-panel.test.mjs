@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict'
 import { loadBundleModule } from './load-module.mjs'
 
-const { createArchiveCleanupSection, formatBytes, formatDay, CSS_LINES } = loadBundleModule('dsao/archive-cleanup')
+const { createArchiveCleanupSection, formatBytes, formatDay, CSS_LINES, projectName, workspaceText, workspacePaths } = loadBundleModule('dsao/archive-cleanup')
 
 /** Scan report in the exact shape lib/archive-cleanup.js produces. */
 function reportFixture(overrides = {}) {
@@ -43,7 +43,7 @@ function reportFixture(overrides = {}) {
         workspaces: [{ id: 'w1', title: 'one', path: 'D:\\proj\\one' }],
       },
     ],
-    missing: [{ id: 'session-c', live: false, running: false, attached: false, workspaces: ['one'], reason: 'no-stored-log' }],
+    missing: [{ id: 'session-c', live: false, running: false, attached: false, workspaces: [{ id: 'w1', title: 'one', path: 'D:\\proj\\one' }], reason: 'no-stored-log' }],
     live: ['session-b'],
     running: ['session-b'],
     totalBytes: 1574912,
@@ -209,6 +209,60 @@ test('formatters read well at both ends of the scale', () => {
   assert.equal(formatDay('2026-09-01T08:00:00.000Z'), '2026-09-01')
   assert.equal(formatDay(null), '—')
   assert.equal(formatDay('nonsense'), '—')
+})
+
+test('the 项目 column shows project names, never a path', async () => {
+  // The column is narrow and scanned by eye: a Windows path wastes it. The
+  // name comes from the workspace title, else the folder off its path, else
+  // the folder off the session cwd; the full path stays in the hover detail.
+  assert.equal(projectName('D:\\proj\\one'), 'one')
+  assert.equal(projectName('/srv/proj/two/'), 'two')
+  assert.equal(projectName('single'), 'single')
+  assert.equal(projectName(''), '')
+
+  assert.equal(workspaceText({ workspaces: [{ id: 'w1', title: 'one', path: 'D:\\proj\\one' }] }), 'one')
+  // A workspace that never got a title still reads as its folder name.
+  assert.equal(workspaceText({ workspaces: [{ id: 'w2', title: '', path: 'D:\\proj\\untitled' }] }), 'untitled')
+  // No workspace at all: fall back to the cwd's name, not the cwd.
+  assert.equal(workspaceText({ workspaces: [], cwd: 'D:\\proj\\three' }), 'three')
+  assert.equal(workspaceText({ workspaces: [], cwd: '' }), '未分组')
+  // The legacy string shape an older host could emit still yields a name.
+  assert.equal(workspaceText({ workspaces: ['D:\\proj\\legacy'] }), 'legacy')
+
+  const withUntitled = {
+    ...reportFixture(),
+    items: [
+      ...reportFixture().items,
+      {
+        id: 'session-d',
+        cwd: 'D:\\proj\\untitled',
+        live: false,
+        running: false,
+        attached: false,
+        path: 'C:\\home\\.dsh\\sessions\\--cwd--\\session-d\\session.jsonl.zstd',
+        dirPath: 'C:\\home\\.dsh\\sessions\\--cwd--\\session-d',
+        bytes: 1024,
+        mtime: '2026-09-06T08:00:00.000Z',
+        workspaces: [{ id: 'w2', title: '', path: 'D:\\proj\\untitled' }],
+      },
+    ],
+    archivedIds: ['session-a', 'session-b', 'session-c', 'session-d'],
+    deletableIds: ['session-a', 'session-c', 'session-d'],
+    unarchivableIds: ['session-a', 'session-c', 'session-d'],
+    archivedCount: 4,
+  }
+  const { harness, ArchiveCleanupSection } = panel(async () => withUntitled)
+  harness.mount(ArchiveCleanupSection)
+  await drain()
+  const tree = harness.settle(ArchiveCleanupSection)
+  const projectCells = byClass(tree, 'dsao-ac-td--muted').map((node) => texts(node).join(''))
+  // Rows are the stored items first (a, b, d), then the missing-log row (c).
+  assert.deepEqual(projectCells, ['one', 'one', 'untitled', 'one'], 'one cell per row, name only')
+  assert.equal(/\\|:/.test(projectCells.join('')), false, 'no path separator or drive letter renders in the column')
+  // …and the path is still one hover away.
+  const titles = byClass(tree, 'dsao-ac-td--muted').map((node) => node.props.title)
+  assert.deepEqual(titles, ['D:\\proj\\one', 'D:\\proj\\one', 'D:\\proj\\untitled', 'D:\\proj\\one'])
+  assert.equal(workspacePaths({ workspaces: [{ id: 'w2', title: 'x', path: 'D:\\proj\\untitled' }], cwd: 'D:\\ignore' }), 'D:\\proj\\untitled')
 })
 
 test('the page stylesheet speaks only in host design tokens', () => {

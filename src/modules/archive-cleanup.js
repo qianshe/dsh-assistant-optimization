@@ -107,12 +107,53 @@
 			return row.label || row.title || id.slice(0, 12);
 		}
 
+		/**
+		 * The project column shows *names*, never a path: last segment of a
+		 * project directory, with trailing separators tolerated. `D:\proj\one`
+		 * and `/srv/proj/one/` both read as `one`.
+		 */
+		function projectName(text) {
+			if (typeof text !== "string" || text === "") return "";
+			var trimmed = text.replace(/[\\/]+$/, "");
+			var index = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+			return index === -1 ? trimmed : trimmed.slice(index + 1);
+		}
+
+		/**
+		 * 项目列文案：优先工作区标题，其次其目录名，最后回落到 cwd 的目录名；
+		 * 一个名字都没有才写「未分组」。完整路径不丢，挪进了单元格的 title 里
+		 * （表格一列不该用来展示 Windows 路径）。
+		 * 兼容两种宿主形态：`{ id, title, path }` 对象，以及旧构建留下的字符串。
+		 */
 		function workspaceText(entry) {
-			var names = (entry.workspaces || []).map(function (w) {
-				return w.title || w.path || w.id;
-			});
+			var list = entry.workspaces || [];
+			var names = [];
+			for (var i = 0; i < list.length; i += 1) {
+				var w = list[i];
+				var name = "";
+				if (typeof w === "string") name = projectName(w);
+				else if (w !== null && typeof w === "object") {
+					if (typeof w.title === "string" && w.title !== "") name = w.title;
+					else if (typeof w.path === "string" && w.path !== "") name = projectName(w.path);
+				}
+				if (name !== "") names.push(name);
+			}
 			if (names.length > 0) return names.join("、");
-			return entry.cwd ? entry.cwd : "未分组";
+			if (typeof entry.cwd === "string" && entry.cwd !== "") return projectName(entry.cwd);
+			return "未分组";
+		}
+
+		/** The hover detail behind the 项目 column: the paths the names came from. */
+		function workspacePaths(entry) {
+			var list = entry.workspaces || [];
+			var paths = [];
+			for (var i = 0; i < list.length; i += 1) {
+				var w = list[i];
+				if (typeof w === "string") paths.push(w);
+				else if (w !== null && typeof w === "object" && typeof w.path === "string" && w.path !== "") paths.push(w.path);
+			}
+			if (paths.length === 0 && typeof entry.cwd === "string" && entry.cwd !== "") paths.push(entry.cwd);
+			return paths.join("、");
 		}
 
 		/**
@@ -356,7 +397,7 @@
 								!isCurrent && row.running ? React.createElement("span", { className: "dsao-ac-pill" }, "运行中") : null,
 								!isCurrent && row.live && !row.running ? React.createElement("span", { className: "dsao-ac-pill" }, "已打开") : null,
 								row.absent ? React.createElement("span", { className: "dsao-ac-pill dsao-ac-pill--bad" }, "正文缺失") : null)),
-						React.createElement("td", { className: "dsao-ac-td dsao-ac-td--muted", title: row.entry.path || row.entry.cwd },
+						React.createElement("td", { className: "dsao-ac-td dsao-ac-td--muted", title: workspacePaths(row.entry) || row.entry.path },
 							workspaceText(row.entry)),
 						React.createElement("td", { className: "dsao-ac-td dsao-ac-td--num" }, formatBytes(row.bytes)),
 						React.createElement("td", { className: "dsao-ac-td dsao-ac-td--num" }, formatDay(row.entry.mtime)),
@@ -449,5 +490,8 @@
 		exports.createArchiveCleanupSection = createArchiveCleanupSection;
 		exports.formatBytes = formatBytes;
 		exports.formatDay = formatDay;
+		exports.projectName = projectName;
+		exports.workspaceText = workspaceText;
+		exports.workspacePaths = workspacePaths;
 		exports.CSS_LINES = CSS_LINES;
 		exports.ensureCss = ensureCss;
